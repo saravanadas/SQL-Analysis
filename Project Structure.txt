@@ -1,0 +1,26 @@
+unified-mcp/
+├── .env                        # Local environment variables
+├── .gitignore                  # Git exclusions
+├── Dockerfile                  # Container definition
+├── railway.toml                # Railway deployment configuration
+├── requirements.txt            # Python dependencies
+├── README.md                   # Documentation
+├── src/                        # Source code root
+│   ├── __init__.py
+│   ├── main.py                 # FastMCP entry point
+│   ├── config/
+│   │   ├── __init__.py
+│   │   ├── settings.py         # Pydantic BaseSettings
+│   ├── utils/
+│   │   ├── __init__.py
+│   │   ├── logger.py           # Structured logging
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── sql_server_client.py   # On-prem SQL extraction
+│   │   ├── railway_db_client.py   # Railway DB staging
+│   │   ├── sharepoint_client.py   # Microsoft Graph API
+│   │   ├── file_manager.py        # CSV/File IO operations
+│   ├── tools/
+│   │   ├── __init__.py
+│   │   ├── database_tools.py      # MCP Tool definitions for DB
+│   │   ├── sharepoint_tools.py    # MCP Tool definitions for SP
