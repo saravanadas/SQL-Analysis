@@ -174,7 +174,7 @@ def register_sharepoint_tools(mcp: FastMCP):
                 
                 file_name = item["name"]
 
-                # Skip already processed files
+                # ✅ NEW: skip already processed files
                 if railway_client.is_file_processed(file_name):
                     logger.info(f"Skipping already processed file: {file_name}")
                     continue
@@ -182,6 +182,8 @@ def register_sharepoint_tools(mcp: FastMCP):
                 # Skip folders
                 if "file" not in item:
                     continue
+
+                #file_name = item["name"]
 
                 # Only process CSV / Excel files
                 if not (file_name.lower().endswith(".csv") or file_name.lower().endswith(".xlsx")):
@@ -209,12 +211,15 @@ def register_sharepoint_tools(mcp: FastMCP):
                 # =========================
                 # PARSE FILE
                 # =========================
-                from src.utils.data_validator import validate_dataframe
-
                 if file_name.lower().endswith(".csv"):
                     df = pd.read_csv(temp_path)
+                    
+                    from src.utils.data_validator import validate_dataframe
+
                     df = validate_dataframe(df)
                 else:
+                    df = pd.read_excel(temp_path)
+                    
                     df = pd.read_excel(temp_path)
                     df = validate_dataframe(df)
 
@@ -243,7 +248,7 @@ def register_sharepoint_tools(mcp: FastMCP):
 
                 total_rows += inserted
                 
-                # Mark file processed
+                # NEW: mark file processed
                 railway_client.mark_file_processed(file_name)
 
                 # Progress tracking
