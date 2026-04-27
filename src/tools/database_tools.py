@@ -8,12 +8,19 @@ from src.utils.security import validate_query
 logger = setup_logger(__name__)
 
 # =========================
-# SINGLETON INSTANCES (CREATED ONCE)
+# FIX: Lazy initialization (VERY IMPORTANT)
+# Prevents app crash during startup
 # =========================
-# These are shared across all requests to avoid repeated DB engine creation
-sql_client = SQLServerClient()
-railway_client = RailwayDBClient()
-file_manager = FileManager()
+
+def get_sql_client():
+    return SQLServerClient()
+
+def get_railway_client():
+    return RailwayDBClient()
+
+def get_file_manager():
+    return FileManager()
+
 
 def load_sql_to_railway(query: str, table_name: str) -> dict:
     """
@@ -27,6 +34,9 @@ def load_sql_to_railway(query: str, table_name: str) -> dict:
     logger.info(f"Starting SQL → Railway pipeline for table '{table_name}'")
 
     try:
+        sql_client = get_sql_client()
+        railway_client = get_railway_client()
+
         # Step 1: Validate query for safety
         validate_query(query)
 
@@ -74,6 +84,7 @@ def load_sql_to_railway(query: str, table_name: str) -> dict:
         logger.error(f"SQL → Railway pipeline failed: {str(e)}")
         raise
         
+
 def register_database_tools(mcp: FastMCP):
     """Registers database-related tools to the FastMCP instance."""
 
@@ -89,6 +100,9 @@ def register_database_tools(mcp: FastMCP):
         Returns:
             A string confirming the path where the CSV was saved.
         """
+
+        sql_client = get_sql_client()
+        file_manager = get_file_manager()
 
         # Execute query in streaming mode (returns chunks instead of full DataFrame)
         chunks = sql_client.execute_query_to_dataframe(query)
@@ -133,6 +147,9 @@ def register_database_tools(mcp: FastMCP):
             A status string detailing the number of rows transferred.
         """
 
+        sql_client = get_sql_client()
+        railway_client = get_railway_client()
+
         # Execute query in streaming mode (chunked extraction)
         chunks = sql_client.execute_query_to_dataframe(query)
 
@@ -155,6 +172,7 @@ def register_database_tools(mcp: FastMCP):
                     target_table,
                     mode="append"
                 )
+
             total_rows += rows_inserted
 
             logger.info(f"Total rows processed so far: {total_rows}")
