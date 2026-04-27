@@ -26,25 +26,24 @@ mcp = create_mcp()
 # Mount MCP — try methods in order of newest → oldest fastmcp API
 mcp_app = None
 
-try:
-    mcp_app = mcp.streamable_http_app()
-    logger.info("Mounted MCP via streamable_http_app (fastmcp 2.x)")
-except AttributeError:
-    try:
-        mcp_app = mcp.sse_app()
-        logger.info("Mounted MCP via sse_app (fastmcp 1.x)")
-    except AttributeError:
-        try:
-            mcp_app = mcp.asgi_app()
-            logger.info("Mounted MCP via asgi_app (fastmcp legacy)")
-        except AttributeError:
-            logger.error("Failed to mount MCP: No compatible app method found on FastMCP instance")
-            raise RuntimeError("FastMCP instance lacks asgi_app, sse_app, or create_asgi_app")
+# List of known methods to get the ASGI/HTTP app from FastMCP
+methods = ["streamable_http_app", "sse_app", "create_asgi_app", "get_asgi_app", "asgi_app"]
 
-if mcp_app:
-    app.mount("/mcp", mcp_app)
-else:
-    logger.error("MCP App is None, mounting skipped.")
+for method_name in methods:
+    if hasattr(mcp, method_name):
+        try:
+            mcp_app = getattr(mcp, method_name)()
+            logger.info(f"Mounted MCP via {method_name}")
+            break
+        except Exception as e:
+            logger.warning(f"Found {method_name} but failed to call it: {str(e)}")
+
+if not mcp_app:
+    # Final fallback: check if the object itself is an ASGI app
+    logger.error("Failed to mount MCP: No compatible app method found on FastMCP instance")
+    raise RuntimeError("FastMCP instance lacks a valid ASGI app method (tried streamable_http_app, sse_app, create_asgi_app, etc.)")
+
+app.mount("/mcp", mcp_app)
 
 @app.get("/health")
 def health():
@@ -63,7 +62,7 @@ def cleanup_job():
         logger.error(f"Background cleanup failed: {str(e)}")
 
 scheduler = BackgroundScheduler()
-scheduler.add_job(cleanup_job, 'interval', hours=5)
+scheduler.add_job(cleanup_job, 'interval', hours=1)
 scheduler.start()
 
 def main():
