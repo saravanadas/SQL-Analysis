@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from src.utils.security import validate_token, generate_token  #  UPDATED IMPORT
 from src.utils.logger import setup_logger
 from src.tools.database_tools import load_sql_to_railway
-
+from src.services.sharepoint_client import SharePointClient
 
 router = APIRouter()
 job_manager = JobManager()
@@ -101,6 +101,19 @@ def job_status(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
 
     return job
+    
+@router.get("/test-sharepoint")
+def test_sharepoint():
+    sp = SharePointClient()
+    
+    # List files in root
+    files = sp.list_files_in_drive()
+
+    return {
+        "status": "success",
+        "file_count": len(files),
+        "files": files[:5]  # show only first 5
+    }
 
 
 @router.get("/download/{file_id}")
