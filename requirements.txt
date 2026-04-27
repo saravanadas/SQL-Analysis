@@ -1,4 +1,4 @@
-fastapi
+fastmcp==0.2.3
 uvicorn
 sqlalchemy
 pyodbc
