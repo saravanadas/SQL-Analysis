@@ -1,16 +1,17 @@
-import os
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 from src.services.sharepoint_client import SharePointClient
 from src.services.file_manager import FileManager
 from src.utils.logger import setup_logger
+from src.utils.security import generate_token
+from src.config.settings import settings
+import os
 import pandas as pd
 from src.services.railway_db_client import RailwayDBClient
 
 logger = setup_logger(__name__)
 
 # =========================================================
-# FIX: Lazy initialization (VERY IMPORTANT)
-# Prevents app crash during startup
+# FIX: Lazy initialization
 # =========================================================
 
 def get_sp_client():
@@ -30,17 +31,9 @@ def register_sharepoint_tools(mcp: FastMCP):
     def list_sharepoint_files(folder_path: str = "") -> str:
         """
         Lists all files and folders in a specific SharePoint directory.
-        
-        Args:
-            folder_path: The relative path inside the SharePoint Document Library. Leave empty for root.
-            
-        Returns:
-            A formatted string listing item names and their unique IDs.
         """
         try:
             sp_client = get_sp_client()
-
-            # UPDATED: handle pagination inside client
             items = sp_client.list_files(folder_path)
 
             if not items:
@@ -51,7 +44,6 @@ def register_sharepoint_tools(mcp: FastMCP):
                 item_type = "Folder" if "folder" in item else "File"
                 result += f"- [{item_type}] {item['name']} (ID: {item['id']})\n"
                 
-            logger.info(f"Listed {len(items)} SharePoint items from '{folder_path}'")
             return result
 
         except Exception as e:
@@ -62,42 +54,39 @@ def register_sharepoint_tools(mcp: FastMCP):
     @mcp.tool()
     def download_sharepoint_file(file_id: str, file_name: str) -> str:
         """
-        Downloads a file from SharePoint using its ID and saves it locally.
-        
-        Args:
-            file_id: The unique Microsoft Graph ID of the file.
-            file_name: What to name the file locally (including extension).
-            
-        Returns:
-            A status string indicating the file path.
+        Downloads a file from SharePoint and provides a secure download link.
         """
         try:
             sp_client = get_sp_client()
             file_manager = get_file_manager()
 
-            # Generate destination path
-            dest_path = os.path.join(file_manager.output_dir, file_name)
+            # Generate unique local file ID
+            local_id = file_manager.generate_file_id()
+            extension = os.path.splitext(file_name)[1]
+            dest_path = file_manager.get_file_path(local_id, extension)
 
             logger.info(f"Downloading SharePoint file: {file_name} (ID: {file_id})")
 
-            # UPDATED: first get metadata (to fetch download URL)
+            # Fetch download URL from Graph API
             file_metadata = sp_client.get_file_metadata(file_id)
 
             if "@microsoft.graph.downloadUrl" not in file_metadata:
                 raise Exception("Download URL not found for file")
 
-            download_url = file_metadata["@microsoft.graph.downloadUrl"]
+            download_url_sp = file_metadata["@microsoft.graph.downloadUrl"]
 
             # Download file content
-            content = sp_client.download_file(download_url)
+            content = sp_client.download_file(download_url_sp)
 
             # Save file locally
             with open(dest_path, "wb") as f:
                 f.write(content)
 
-            logger.info(f"File saved to {dest_path}")
+            # Generate secure download link for user
+            token = generate_token(local_id)
+            final_url = f"{settings.app_base_url}/download/{local_id}?token={token}"
 
-            return f"File successfully downloaded to {dest_path}."
+            return f"File '{file_name}' downloaded successfully.\n\nDownload Link:\n{final_url}"
 
         except Exception as e:
             logger.error(f"Download failed for file_id={file_id}: {str(e)}")
@@ -107,13 +96,7 @@ def register_sharepoint_tools(mcp: FastMCP):
     @mcp.tool()
     def download_sharepoint_folder(folder_path: str = "") -> str:
         """
-        Downloads all files from a SharePoint folder.
-        
-        Args:
-            folder_path: The relative folder path.
-            
-        Returns:
-            Summary of downloaded files.
+        Downloads all files from a SharePoint folder and provides download links.
         """
         try:
             sp_client = get_sp_client()
@@ -124,37 +107,36 @@ def register_sharepoint_tools(mcp: FastMCP):
             if not items:
                 return "No files found in the specified directory."
 
-            downloaded_count = 0
+            download_links = []
 
             for item in items:
-                # Skip folders
                 if "file" not in item:
                     continue
 
                 file_name = item["name"]
-
-                # Get download URL
                 if "@microsoft.graph.downloadUrl" not in item:
                     continue
 
-                download_url = item["@microsoft.graph.downloadUrl"]
+                download_url_sp = item["@microsoft.graph.downloadUrl"]
 
-                # FIX: prevent overwrite
-                file_id_local = file_manager.generate_file_id()
-                dest_path = os.path.join(file_manager.output_dir, f"{file_id_local}_{file_name}")
+                # Save locally
+                local_id = file_manager.generate_file_id()
+                extension = os.path.splitext(file_name)[1]
+                dest_path = file_manager.get_file_path(local_id, extension)
 
-                logger.info(f"Downloading file from folder: {file_name}")
-
-                content = sp_client.download_file(download_url)
-
+                content = sp_client.download_file(download_url_sp)
                 with open(dest_path, "wb") as f:
                     f.write(content)
 
-                downloaded_count += 1
+                # Generate link
+                token = generate_token(local_id)
+                link = f"{settings.app_base_url}/download/{local_id}?token={token}"
+                download_links.append(f"- {file_name}: {link}")
 
-            logger.info(f"Downloaded {downloaded_count} files from '{folder_path}'")
+            if not download_links:
+                return "No files were available for download in this folder."
 
-            return f"Downloaded {downloaded_count} files from SharePoint folder."
+            return "Successfully downloaded files from SharePoint:\n" + "\n".join(download_links)
 
         except Exception as e:
             logger.error(f"Folder download failed: {str(e)}")
