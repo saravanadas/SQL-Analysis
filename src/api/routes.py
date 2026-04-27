@@ -108,42 +108,19 @@ def job_status(job_id: str):
     
 @router.get("/test-sharepoint")
 def test_sharepoint():
-    """
-    Debug SharePoint connectivity step-by-step
-    """
     try:
-        # =========================
-        # STEP 1: Route working
-        # =========================
-        logger.info("[DEBUG] Step 1: Route hit successfully")
-
-        # =========================
-        # STEP 2: Initialize client
-        # =========================
         sp = SharePointClient()
-        logger.info("[DEBUG] Step 2: SharePointClient initialized")
 
-        # =========================
-        # STEP 3: Call SharePoint API
-        # =========================
-        files = sp.list_files(folder_path="")   # ✅ FIXED
-        logger.info(f"[DEBUG] Step 3: Files fetched. Count={len(files)}")
+        # ONLY TOKEN TEST (FAST)
+        token = sp._get_access_token()
 
         return {
             "status": "success",
-            "step": "completed",
-            "file_count": len(files),
-            "files": files[:5]
+            "message": "SharePoint auth working"
         }
 
     except Exception as e:
-        logger.error(f"[DEBUG] Error occurred: {str(e)}")
-
-        return {
-            "status": "error",
-            "step": "failed",
-            "message": str(e)
-        }
+        return {"error": str(e)}
 
 
 @router.get("/download/{file_id}")
