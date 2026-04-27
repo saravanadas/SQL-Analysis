@@ -1,7 +1,7 @@
 import requests
 from src.config.settings import settings
 from src.utils.logger import setup_logger
-from src.utils.retry import retry
+# from src.utils.retry import retry   # ❌ Removed (causing delay + 502)
 
 logger = setup_logger(__name__)
 
@@ -28,7 +28,8 @@ class SharePointClient:
             "grant_type": "client_credentials"
         }
 
-        response = requests.post(url, data=data, timeout=30)
+        # ✅ Reduced timeout to avoid Railway 502
+        response = requests.post(url, data=data, timeout=10)
         response.raise_for_status()
 
         token = response.json()["access_token"]
@@ -47,15 +48,15 @@ class SharePointClient:
             "Authorization": f"Bearer {self.token}"
         }
 
-    @retry(max_attempts=3, delay=2)
-    def list_files(self, folder_path: str):
+    def list_files(self, folder_path: str = ""):
         """
         List files in a SharePoint folder (with pagination support)
+        LIMITED to avoid timeout in Railway
         """
 
         site_id = settings.sp_site_id
         drive_id = settings.sp_drive_id   
-        
+
         # Handle root vs subfolder
         if folder_path:
             url = f"{self.base_url}/sites/{site_id}/drives/{drive_id}/root:/{folder_path}:/children"
@@ -64,53 +65,62 @@ class SharePointClient:
 
         files = []
 
-        while url:
-            response = requests.get(url, headers=self._headers(), timeout=30)
+        # ✅ LIMIT results to avoid timeout
+        max_items = 20
+
+        while url and len(files) < max_items:
+            logger.info(f"[DEBUG] Calling SharePoint API: {url}")
+
+            # ✅ Timeout added
+            response = requests.get(url, headers=self._headers(), timeout=10)
 
             # 🔁 Auto token refresh
             if response.status_code == 401:
                 logger.info("Token expired. Refreshing...")
                 self.token = self._get_access_token()
-                response = requests.get(url, headers=self._headers(), timeout=30)
+                response = requests.get(url, headers=self._headers(), timeout=10)
 
             response.raise_for_status()
 
             data = response.json()
             files.extend(data.get("value", []))
 
-            url = data.get("@odata.nextLink")  # pagination
+            # pagination
+            url = data.get("@odata.nextLink")
 
         logger.info(f"Retrieved {len(files)} files from SharePoint")
         return files
 
-    @retry(max_attempts=3, delay=2)
     def download_file(self, download_url: str):
         """
         Download file content from SharePoint
         """
-        response = requests.get(download_url, timeout=60)
+
+        # ✅ Timeout reduced
+        response = requests.get(download_url, timeout=15)
 
         if response.status_code == 401:
             logger.info("Token expired. Refreshing...")
             self.token = self._get_access_token()
-            response = requests.get(download_url)
+            response = requests.get(download_url, timeout=15)
 
         response.raise_for_status()
         return response.content
         
-    @retry(max_attempts=3, delay=2)
     def get_file_metadata(self, file_id: str):
         """
         Fetch metadata for a file (used to get download URL)
         """
+
         url = f"{self.base_url}/sites/{settings.sp_site_id}/drives/{settings.sp_drive_id}/items/{file_id}"
 
-        response = requests.get(url, headers=self._headers(), timeout=30)
+        # ✅ Timeout added
+        response = requests.get(url, headers=self._headers(), timeout=10)
 
         if response.status_code == 401:
             logger.info("Token expired. Refreshing...")
             self.token = self._get_access_token()
-            response = requests.get(url, headers=self._headers(), timeout=30)
+            response = requests.get(url, headers=self._headers(), timeout=10)
 
         response.raise_for_status()
         
