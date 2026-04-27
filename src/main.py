@@ -19,7 +19,7 @@ def create_app() -> FastMCP:
     # Initialize the server instance
     # Depending on the version, fastmcp or mcp.server.fastmcp is used.
     # We use "fastmcp" from PrefectHQ for enhanced capabilities.
-    mcp = FastMCP("UnifiedDataMCP", dependencies=["pandas", "sqlalchemy"])
+    mcp = FastMCP("UnifiedDataMCP")
     
     # Register all tool modules
     register_database_tools(mcp)
