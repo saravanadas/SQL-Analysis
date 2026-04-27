@@ -8,9 +8,19 @@ from src.services.railway_db_client import RailwayDBClient
 
 logger = setup_logger(__name__)
 
-sp_client = SharePointClient()
-file_manager = FileManager()
-railway_client = RailwayDBClient()
+# =========================================================
+# FIX: Lazy initialization (VERY IMPORTANT)
+# Prevents app crash during startup
+# =========================================================
+
+def get_sp_client():
+    return SharePointClient()
+
+def get_file_manager():
+    return FileManager()
+
+def get_railway_client():
+    return RailwayDBClient()
 
 
 def register_sharepoint_tools(mcp: FastMCP):
@@ -28,6 +38,8 @@ def register_sharepoint_tools(mcp: FastMCP):
             A formatted string listing item names and their unique IDs.
         """
         try:
+            sp_client = get_sp_client()
+
             # UPDATED: handle pagination inside client
             items = sp_client.list_files(folder_path)
 
@@ -60,6 +72,9 @@ def register_sharepoint_tools(mcp: FastMCP):
             A status string indicating the file path.
         """
         try:
+            sp_client = get_sp_client()
+            file_manager = get_file_manager()
+
             # Generate destination path
             dest_path = os.path.join(file_manager.output_dir, file_name)
 
@@ -101,6 +116,9 @@ def register_sharepoint_tools(mcp: FastMCP):
             Summary of downloaded files.
         """
         try:
+            sp_client = get_sp_client()
+            file_manager = get_file_manager()
+
             items = sp_client.list_files(folder_path)
 
             if not items:
@@ -160,6 +178,10 @@ def register_sharepoint_tools(mcp: FastMCP):
             Status message with total rows loaded
         """
         try:
+            sp_client = get_sp_client()
+            file_manager = get_file_manager()
+            railway_client = get_railway_client()
+
             railway_client.ensure_tracking_table()
             
             items = sp_client.list_files(folder_path)
@@ -182,8 +204,6 @@ def register_sharepoint_tools(mcp: FastMCP):
                 # Skip folders
                 if "file" not in item:
                     continue
-
-                #file_name = item["name"]
 
                 # Only process CSV / Excel files
                 if not (file_name.lower().endswith(".csv") or file_name.lower().endswith(".xlsx")):
@@ -211,15 +231,12 @@ def register_sharepoint_tools(mcp: FastMCP):
                 # =========================
                 # PARSE FILE
                 # =========================
+                from src.utils.data_validator import validate_dataframe
+
                 if file_name.lower().endswith(".csv"):
                     df = pd.read_csv(temp_path)
-                    
-                    from src.utils.data_validator import validate_dataframe
-
                     df = validate_dataframe(df)
                 else:
-                    df = pd.read_excel(temp_path)
-                    
                     df = pd.read_excel(temp_path)
                     df = validate_dataframe(df)
 
