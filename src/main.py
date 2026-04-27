@@ -27,21 +27,36 @@ mcp = create_mcp()
 mcp_app = None
 
 # List of known methods to get the ASGI/HTTP app from FastMCP
-methods = ["streamable_http_app", "sse_app", "create_asgi_app", "get_asgi_app", "asgi_app"]
+methods = [
+    "streamable_http_app", 
+    "sse_app", 
+    "create_asgi_app", 
+    "get_asgi_app", 
+    "get_sse_app",
+    "asgi_app",
+    "asgi",
+    "app"
+]
 
 for method_name in methods:
     if hasattr(mcp, method_name):
         try:
-            mcp_app = getattr(mcp, method_name)()
+            attr = getattr(mcp, method_name)
+            mcp_app = attr() if callable(attr) else attr
             logger.info(f"Mounted MCP via {method_name}")
             break
         except Exception as e:
-            logger.warning(f"Found {method_name} but failed to call it: {str(e)}")
+            logger.warning(f"Found {method_name} but failed to use it: {str(e)}")
 
 if not mcp_app:
-    # Final fallback: check if the object itself is an ASGI app
-    logger.error("Failed to mount MCP: No compatible app method found on FastMCP instance")
-    raise RuntimeError("FastMCP instance lacks a valid ASGI app method (tried streamable_http_app, sse_app, create_asgi_app, etc.)")
+    # Final fallback: check if the object itself is an ASGI app (callable)
+    if callable(mcp):
+        mcp_app = mcp
+        logger.info("Mounted MCP object directly as ASGI app")
+    else:
+        available_attrs = [a for a in dir(mcp) if not a.startswith("_")]
+        logger.error(f"Failed to mount MCP. Available attributes: {available_attrs}")
+        raise RuntimeError(f"FastMCP instance lacks a valid ASGI app method. Available: {available_attrs}")
 
 app.mount("/mcp", mcp_app)
 
