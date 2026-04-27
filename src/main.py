@@ -24,6 +24,8 @@ def create_mcp() -> FastMCP:
 mcp = create_mcp()
 
 # Mount MCP — try methods in order of newest → oldest fastmcp API
+mcp_app = None
+
 try:
     mcp_app = mcp.streamable_http_app()
     logger.info("Mounted MCP via streamable_http_app (fastmcp 2.x)")
@@ -32,14 +34,37 @@ except AttributeError:
         mcp_app = mcp.sse_app()
         logger.info("Mounted MCP via sse_app (fastmcp 1.x)")
     except AttributeError:
-        mcp_app = mcp.asgi_app()
-        logger.info("Mounted MCP via asgi_app (fastmcp legacy)")
+        try:
+            mcp_app = mcp.asgi_app()
+            logger.info("Mounted MCP via asgi_app (fastmcp legacy)")
+        except AttributeError:
+            logger.error("Failed to mount MCP: No compatible app method found on FastMCP instance")
+            raise RuntimeError("FastMCP instance lacks asgi_app, sse_app, or create_asgi_app")
 
-app.mount("/mcp", mcp_app)
+if mcp_app:
+    app.mount("/mcp", mcp_app)
+else:
+    logger.error("MCP App is None, mounting skipped.")
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+from apscheduler.schedulers.background import BackgroundScheduler
+from src.services.file_manager import FileManager
+
+# ── Cleanup Job ──
+def cleanup_job():
+    try:
+        fm = FileManager()
+        fm.cleanup_old_files(hours=1)
+        logger.info("Background cleanup completed successfully.")
+    except Exception as e:
+        logger.error(f"Background cleanup failed: {str(e)}")
+
+scheduler = BackgroundScheduler()
+scheduler.add_job(cleanup_job, 'interval', hours=5)
+scheduler.start()
 
 def main():
     port = int(os.environ.get("PORT", 8000))
