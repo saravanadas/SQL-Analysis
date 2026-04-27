@@ -79,7 +79,17 @@ def validate_query(query: str) -> None:
     if not query or not query.strip():
         raise ValueError("Query cannot be empty")
 
-    q = query.strip().lower()
+    # Remove comments (single line and multi-line) before validation
+    import re
+    # Remove single line comments starting with --
+    q_no_comments = re.sub(r'--.*', '', query)
+    # Remove multi-line comments /* ... */
+    q_no_comments = re.sub(r'/\*.*?\*/', '', q_no_comments, flags=re.DOTALL)
+    
+    q = q_no_comments.strip().lower()
+
+    if not q:
+        raise ValueError("Query contains only comments or whitespace")
 
     # Allow only SELECT queries
     if not q.startswith("select"):
@@ -99,7 +109,7 @@ def validate_query(query: str) -> None:
     ]
 
     for keyword in forbidden_keywords:
-        if keyword in q:
+        if re.search(rf'\b{keyword}\b', q):
             raise Exception(f"Forbidden keyword detected: {keyword.upper()}")
 
     # Prevent multiple statements
