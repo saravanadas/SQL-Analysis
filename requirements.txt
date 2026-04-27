@@ -8,5 +8,4 @@ pydantic
 python-dotenv
 openpyxl
 apscheduler
-fastmcp
 psycopg2-binary==2.9.9
