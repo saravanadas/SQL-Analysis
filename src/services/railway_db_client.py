@@ -134,3 +134,16 @@ class RailwayDBClient:
 
         with self.engine.begin() as conn:
             conn.execute(text(query), {"file_name": file_name})
+
+    @retry(max_attempts=3, delay=2)
+    def execute_query(self, query: str) -> pd.DataFrame:
+        """
+        Executes a SELECT query on the Railway database and returns a DataFrame.
+        """
+        logger.info(f"Executing analytical query: {query[:100]}...")
+        try:
+            with self.engine.connect() as conn:
+                return pd.read_sql(text(query), conn)
+        except Exception as e:
+            logger.error(f"Analytical query failed: {str(e)}")
+            raise
