@@ -104,16 +104,21 @@ def job_status(job_id: str):
     
 @router.get("/test-sharepoint")
 def test_sharepoint():
-    sp = SharePointClient()
-    
-    # List files in root
-    files = sp.list_files_in_drive()
+    try:
+        sp = SharePointClient()
+        files = sp.list_files_in_drive()
 
-    return {
-        "status": "success",
-        "file_count": len(files),
-        "files": files[:5]  # show only first 5
-    }
+        return {
+            "status": "success",
+            "file_count": len(files),
+            "files": files[:5]
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 
 @router.get("/download/{file_id}")
