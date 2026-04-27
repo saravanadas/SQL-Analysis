@@ -15,7 +15,7 @@ app.include_router(router)
 
 # ── FastMCP (MCP protocol tools) ──
 def create_mcp() -> FastMCP:
-    mcp = FastMCP("UnifiedDataMCP", dependencies=["pandas", "sqlalchemy"])
+    mcp = FastMCP("UnifiedDataMCP")
     register_database_tools(mcp)
     register_sharepoint_tools(mcp)
     logger.info("All MCP tools registered successfully.")
