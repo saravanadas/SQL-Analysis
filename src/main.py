@@ -21,9 +21,21 @@ def create_mcp() -> FastMCP:
     logger.info("All MCP tools registered successfully.")
     return mcp
 
-# Mount MCP as a sub-application on /mcp
 mcp = create_mcp()
-app.mount("/mcp", mcp.streamable_http_app())
+
+# Mount MCP — try methods in order of newest → oldest fastmcp API
+try:
+    mcp_app = mcp.streamable_http_app()
+    logger.info("Mounted MCP via streamable_http_app (fastmcp 2.x)")
+except AttributeError:
+    try:
+        mcp_app = mcp.sse_app()
+        logger.info("Mounted MCP via sse_app (fastmcp 1.x)")
+    except AttributeError:
+        mcp_app = mcp.asgi_app()
+        logger.info("Mounted MCP via asgi_app (fastmcp legacy)")
+
+app.mount("/mcp", mcp_app)
 
 @app.get("/health")
 def health():
