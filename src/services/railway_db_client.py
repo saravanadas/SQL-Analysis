@@ -3,6 +3,7 @@ import pandas as pd
 from src.config.settings import settings
 from src.utils.logger import setup_logger
 from src.utils.retry import retry
+from sqlalchemy import text
 
 logger = setup_logger(__name__)
 
@@ -21,9 +22,16 @@ class RailwayDBClient:
             connect_args={"connect_timeout": 100}
         )
         logger.info("Initialized Railway DB staging engine.")
+        
+        try:
+            with self.engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+                logger.info("Railway DB connection verified.")
+        except Exception as e:
+            logger.error(f"DB connection failed at startup: {str(e)}")
 
     @retry(max_attempts=3, delay=2)
-    def stage_dataframe(self, df: pd.DataFrame, table_name: str, if_exists: str = 'replace') -> int:
+    def stage_dataframe(self, df: pd.DataFrame, table_name: str, if_exists: str = 'append') -> int:
         """
         Loads a Pandas DataFrame into the Railway Database.
         Uses method='multi' which is highly optimized for PostgreSQL inserts.
@@ -68,7 +76,7 @@ class RailwayDBClient:
             logger.error(f"Chunk insert failed: {str(e)}")
             raise
     
-    @retry(max_attempts=3, delay=2)
+    @retry(max_attempts=3, delay=2)  # ✅ NEW
     def bulk_insert(self, df: pd.DataFrame, table_name: str) -> int:
         """
         Optimized bulk insert for large datasets (append mode).
@@ -101,7 +109,7 @@ class RailwayDBClient:
         """
 
         with self.engine.begin() as conn:
-            conn.execute(query)
+            conn.execute(text(query))
             
     def is_file_processed(self, file_name: str) -> bool:
         """
@@ -110,7 +118,7 @@ class RailwayDBClient:
         query = "SELECT 1 FROM mcp_file_tracking WHERE file_name = :file_name"
 
         with self.engine.begin() as conn:
-            result = conn.execute(query, {"file_name": file_name}).fetchone()
+            result = conn.execute(text(query), {"file_name": file_name}).fetchone()
 
         return result is not None
         
@@ -125,4 +133,4 @@ class RailwayDBClient:
         """
 
         with self.engine.begin() as conn:
-            conn.execute(query, {"file_name": file_name})
+            conn.execute(text(query), {"file_name": file_name})
