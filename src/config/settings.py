@@ -91,3 +91,5 @@ class Settings(BaseSettings):
 
 # Singleton instance of settings
 settings = Settings()
+
+print("Loaded Railway DB URL:", settings.railway_db_url[:30], "...")
