@@ -67,11 +67,11 @@ class SharePointClient:
         while url:
             response = requests.get(url, headers=self._headers(), timeout=30)
 
-            # Auto token refresh
+            # 🔁 Auto token refresh
             if response.status_code == 401:
                 logger.info("Token expired. Refreshing...")
                 self.token = self._get_access_token()
-                response = requests.get(url, headers=self._headers())
+                response = requests.get(url, headers=self._headers(), timeout=30)
 
             response.raise_for_status()
 
