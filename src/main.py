@@ -23,7 +23,7 @@ def create_mcp() -> FastMCP:
 
 # Mount MCP as a sub-application on /mcp
 mcp = create_mcp()
-app.mount("/mcp", mcp.asgi_app())
+app.mount("/mcp", mcp.streamable_http_app())
 
 @app.get("/health")
 def health():
