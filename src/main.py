@@ -23,47 +23,21 @@ def create_mcp() -> FastMCP:
 
 mcp = create_mcp()
 
-# Mount MCP — try methods in order of newest → oldest fastmcp API
-mcp_app = None
+# ── Mount MCP (FIXED for your FastMCP version) ──
+try:
+    # ✅ Your FastMCP version supports http_app()
+    app.mount("/mcp", mcp.http_app())
+    logger.info("MCP mounted successfully at /mcp using http_app()")
+except Exception as e:
+    logger.error(f"Failed to mount MCP: {str(e)}")
+    raise
 
-# List of known methods to get the ASGI/HTTP app from FastMCP
-methods = [
-    "streamable_http_app", 
-    "sse_app", 
-    "create_asgi_app", 
-    "get_asgi_app", 
-    "get_sse_app",
-    "asgi_app",
-    "asgi",
-    "app"
-]
-
-for method_name in methods:
-    if hasattr(mcp, method_name):
-        try:
-            attr = getattr(mcp, method_name)
-            mcp_app = attr() if callable(attr) else attr
-            logger.info(f"Mounted MCP via {method_name}")
-            break
-        except Exception as e:
-            logger.warning(f"Found {method_name} but failed to use it: {str(e)}")
-
-if not mcp_app:
-    # Final fallback: check if the object itself is an ASGI app (callable)
-    if callable(mcp):
-        mcp_app = mcp
-        logger.info("Mounted MCP object directly as ASGI app")
-    else:
-        available_attrs = [a for a in dir(mcp) if not a.startswith("_")]
-        logger.error(f"Failed to mount MCP. Available attributes: {available_attrs}")
-        raise RuntimeError(f"FastMCP instance lacks a valid ASGI app method. Available: {available_attrs}")
-
-app.mount("/mcp", mcp_app)
-
+# ── Health Check Endpoint ──
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
+# ── Background Scheduler ──
 from apscheduler.schedulers.background import BackgroundScheduler
 from src.services.file_manager import FileManager
 
@@ -80,6 +54,7 @@ scheduler = BackgroundScheduler()
 scheduler.add_job(cleanup_job, 'interval', hours=1)
 scheduler.start()
 
+# ── Application Entry Point ──
 def main():
     port = int(os.environ.get("PORT", 8000))
     logger.info(f"Starting server on 0.0.0.0:{port}")
