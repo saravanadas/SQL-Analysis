@@ -1,11 +1,14 @@
 fastmcp>=2.0.0
+fastapi
 uvicorn
 sqlalchemy
 pyodbc
 pandas
 requests
 pydantic
+pydantic-settings
 python-dotenv
 openpyxl
 apscheduler
 psycopg2-binary==2.9.9
+tabulate
