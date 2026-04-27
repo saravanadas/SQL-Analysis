@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     # =========================
     log_level: str = Field("INFO", env="LOG_LEVEL")
     output_dir: str = Field("/app/output_files", env="OUTPUT_DIR")
+    app_base_url: str = Field("http://localhost:8000", env="APP_BASE_URL")
 
     # =========================
     # Security (NEW)
