@@ -8,3 +8,4 @@ def root():
     return {"status": "root working"}
 
 app.include_router(router)
+
