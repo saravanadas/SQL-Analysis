@@ -52,14 +52,19 @@ class FileManager:
     def generate_file_id(self) -> str:
         return str(uuid.uuid4())
 
-    # ✅ NEW: Get file path using file_id
-    def get_file_path(self, file_id: str) -> str:
-        return os.path.join(self.output_dir, f"{file_id}.csv")
+    # ✅ FIXED: Support dynamic extensions
+    def get_file_path(self, file_id: str, extension: str = "csv") -> str:
+        # Ensure extension doesn't start with a dot
+        ext = extension.lstrip('.')
+        return os.path.join(self.output_dir, f"{file_id}.{ext}")
 
-    # ✅ NEW: Get file if exists (used in download API)
+    # ✅ FIXED: Search for file with any extension if not specified
     def get_file(self, file_id: str) -> str:
-        path = self.get_file_path(file_id)
-        return path if os.path.exists(path) else None
+        # Try finding the file in the output directory
+        for file in os.listdir(self.output_dir):
+            if file.startswith(file_id):
+                return os.path.join(self.output_dir, file)
+        return None
 
     # ✅ NEW: Cleanup old files (important for Railway disk limits)
     def cleanup_old_files(self, hours: int = 1):
