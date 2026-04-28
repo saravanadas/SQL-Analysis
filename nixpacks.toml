@@ -1,5 +1,7 @@
 [phases.setup]
 nixPkgs = [
+  "python311",
+  "python311Packages.pip",
   "unixODBC",
   "gcc",
   "gnumake",
