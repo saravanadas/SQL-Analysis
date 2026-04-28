@@ -1,6 +1,11 @@
 [build]
 builder = "NIXPACKS"
-watchPatterns = ["src/**", "requirements.txt"]
+watchPatterns = [
+  "src/**",
+  "requirements.txt",
+  "nixpacks.toml",
+  "railway.toml"
+]
 
 [build.nixpacksConfig]
 packages = [
