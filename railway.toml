@@ -2,6 +2,16 @@
 builder = "NIXPACKS"
 watchPatterns = ["src/**", "requirements.txt"]
 
+[build.nixpacksConfig]
+packages = [
+  "unixODBC",
+  "unixODBC-dev",
+  "gcc",
+  "g++",
+  "curl",
+  "gnupg"
+]
+
 [deploy]
 startCommand = "python -m src.main"
 restartPolicyType = "ON_FAILURE"
