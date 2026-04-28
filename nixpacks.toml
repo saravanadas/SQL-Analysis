@@ -1,9 +1,8 @@
 [phases.setup]
 nixPkgs = [
   "unixODBC",
-  "unixODBC-dev",
   "gcc",
-  "g++",
+  "gnumake",
   "curl"
 ]
 
