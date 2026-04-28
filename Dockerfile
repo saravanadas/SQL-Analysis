@@ -1,7 +1,5 @@
-# Base image
 FROM python:3.11-slim
 
-# Install system dependencies + Microsoft ODBC driver
 RUN apt-get update && apt-get install -y \
     curl \
     gnupg \
@@ -14,17 +12,14 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
+# 🔥 IMPORTANT FIX
+ENV LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+
 WORKDIR /app
 
-# Copy files
-COPY . .
-
-# Install Python dependencies
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Expose port (Railway sets PORT automatically)
-ENV PORT=8000
+COPY . .
 
-# Start app
 CMD ["sh", "-c", "uvicorn src.main:app --host 0.0.0.0 --port $PORT"]
