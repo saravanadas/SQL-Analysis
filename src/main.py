@@ -9,6 +9,11 @@ from src.api.routes import router
 from apscheduler.schedulers.background import BackgroundScheduler
 from src.services.file_manager import FileManager
 
+
+import socket
+import pyodbc
+from fastapi import Header, HTTPException
+
 logger = setup_logger(__name__)
 
 app = FastAPI(title="Unified SQL MCP", version="1.0.0")
@@ -34,6 +39,97 @@ except Exception as e:
 @app.get("/health")
 def health():
     return {"status": "ok"}
+    
+#For Testing
+def _check_debug_auth(authorization: str | None):
+    expected = os.getenv("API_TOKEN")
+    if expected and authorization != f"Bearer {expected}":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+@app.get("/debug/tcp")
+def debug_tcp(authorization: str | None = Header(default=None)):
+    _check_debug_auth(authorization)
+
+    host = os.getenv("SQL_SERVER_HOST")
+    port_raw = os.getenv("SQL_SERVER_PORT", "1433")
+    port = int(port_raw)
+
+    env_info = {
+        "SQL_SERVER_HOST": repr(host),
+        "SQL_SERVER_PORT": repr(port_raw),
+        "SQL_SERVER_DB": repr(os.getenv("SQL_SERVER_DB")),
+        "SQL_SERVER_USER": repr(os.getenv("SQL_SERVER_USER")),
+    }
+
+    try:
+        resolved = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        addresses = sorted({item[4][0] for item in resolved})
+
+        sock = socket.create_connection((host, port), 5)
+        sock.close()
+
+        return {
+            "ok": True,
+            "message": "Web can open TCP connection to Railtail",
+            "env": env_info,
+            "resolved_addresses": addresses,
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "message": "Web could not open TCP connection to Railtail",
+            "env": env_info,
+            "error_type": e.__class__.__name__,
+            "error": str(e),
+        }
+
+
+@app.get("/debug/sql")
+def debug_sql(authorization: str | None = Header(default=None)):
+    _check_debug_auth(authorization)
+
+    host = os.getenv("SQL_SERVER_HOST")
+    port = os.getenv("SQL_SERVER_PORT", "1433")
+    db = os.getenv("SQL_SERVER_DB")
+    user = os.getenv("SQL_SERVER_USER")
+    password = os.getenv("SQL_SERVER_PASSWORD")
+
+    conn_str = (
+        "DRIVER={ODBC Driver 18 for SQL Server};"
+        f"SERVER={host},{port};"
+        f"DATABASE={db};"
+        f"UID={user};"
+        f"PWD={password};"
+        "Encrypt=yes;"
+        "TrustServerCertificate=yes;"
+    )
+
+    try:
+        conn = pyodbc.connect(conn_str, timeout=10)
+        cur = conn.cursor()
+        cur.execute("SELECT 1 AS ok")
+        row = cur.fetchone()
+
+        cur.close()
+        conn.close()
+
+        return {
+            "ok": True,
+            "message": "pyodbc reached SQL Server successfully",
+            "value": row[0],
+            "server": host,
+            "database": db,
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "message": "pyodbc could not reach SQL Server",
+            "server": host,
+            "database": db,
+            "error_type": e.__class__.__name__,
+            "error": str(e),
+        }
 
 # Cleanup job
 def cleanup_job():
