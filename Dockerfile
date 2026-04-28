@@ -28,4 +28,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 ENV PORT=8000
 
 # Start app
-CMD ["python", "-m", "src.main"]
+CMD ["sh", "-c", "uvicorn src.main:app --host 0.0.0.0 --port $PORT"]
