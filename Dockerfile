@@ -12,8 +12,8 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# 🔥 IMPORTANT FIX
-ENV LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu
+# 🔥 FIX (important)
+RUN ln -s /usr/lib/x86_64-linux-gnu/libodbc.so.2 /usr/lib/libodbc.so.2 || true
 
 WORKDIR /app
 
