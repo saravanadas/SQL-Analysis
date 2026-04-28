@@ -65,8 +65,6 @@ class JobManager:
                 })
 
     def get_job(self, job_id):
-        logger.info(f"[JOB {job_id}] Status requested")
-
         with self.engine.connect() as conn:
             result = conn.execute(text("""
                 SELECT job_id, status, result, error, created_at
@@ -77,10 +75,12 @@ class JobManager:
         if not result:
             return {"error": "Job not found"}
 
+        import json
+
         return {
             "job_id": result.job_id,
             "status": result.status,
-            "result": result.result,
+            "result": json.loads(result.result) if result.result else None,
             "error": result.error,
             "created_at": str(result.created_at)
         }
