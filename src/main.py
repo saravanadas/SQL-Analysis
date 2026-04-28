@@ -6,14 +6,14 @@ from src.utils.logger import setup_logger
 from src.tools.database_tools import register_database_tools
 from src.tools.sharepoint_tools import register_sharepoint_tools
 from src.api.routes import router
+from apscheduler.schedulers.background import BackgroundScheduler
+from src.services.file_manager import FileManager
 
 logger = setup_logger(__name__)
 
-# ── FastAPI (HTTP server for Railway) ──
 app = FastAPI(title="Unified SQL MCP", version="1.0.0")
 app.include_router(router)
 
-# ── FastMCP (MCP protocol tools) ──
 def create_mcp() -> FastMCP:
     mcp = FastMCP("UnifiedDataMCP")
     register_database_tools(mcp)
@@ -23,25 +23,19 @@ def create_mcp() -> FastMCP:
 
 mcp = create_mcp()
 
-# ── Mount MCP (FIXED for your FastMCP version) ──
+# Mount MCP safely
 try:
-    # ✅ Your FastMCP version supports http_app()
     app.mount("/mcp", mcp.http_app())
-    logger.info("MCP mounted successfully at /mcp using http_app()")
+    logger.info("MCP mounted successfully at /mcp")
 except Exception as e:
-    logger.error(f"Failed to mount MCP: {str(e)}")
-    raise
+    logger.error(f"MCP mount failed: {str(e)}")
 
-# ── Health Check Endpoint ──
+# Health endpoint
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
-# ── Background Scheduler ──
-from apscheduler.schedulers.background import BackgroundScheduler
-from src.services.file_manager import FileManager
-
-# ── Cleanup Job ──
+# Cleanup job
 def cleanup_job():
     try:
         fm = FileManager()
@@ -50,11 +44,23 @@ def cleanup_job():
     except Exception as e:
         logger.error(f"Background cleanup failed: {str(e)}")
 
+# Scheduler lifecycle
 scheduler = BackgroundScheduler()
-scheduler.add_job(cleanup_job, 'interval', hours=1)
-scheduler.start()
 
-# ── Application Entry Point ──
+@app.on_event("startup")
+def start_scheduler():
+    scheduler.add_job(cleanup_job, 'interval', hours=1)
+    scheduler.start()
+    logger.info("Scheduler started")
+
+@app.on_event("shutdown")
+def shutdown_scheduler():
+    try:
+        scheduler.shutdown()
+        logger.info("Scheduler stopped")
+    except Exception:
+        pass
+
 def main():
     port = int(os.environ.get("PORT", 8000))
     logger.info(f"Starting server on 0.0.0.0:{port}")
