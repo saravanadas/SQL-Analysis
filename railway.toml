@@ -1,22 +1,5 @@
 [build]
-builder = "NIXPACKS"
-watchPatterns = [
-  "src/**",
-  "requirements.txt",
-  "nixpacks.toml",
-  "railway.toml"
-]
-
-
-[build.nixpacksConfig]
-packages = [
-  "unixODBC",
-  "unixODBC-dev",
-  "gcc",
-  "g++",
-  "curl",
-  "gnupg"
-]
+builder = "DOCKERFILE"
 
 [deploy]
 startCommand = "python -m src.main"
