@@ -12,10 +12,13 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# 🔥 FIX (important)
+# Fix ODBC linking
 RUN ln -s /usr/lib/x86_64-linux-gnu/libodbc.so.2 /usr/lib/libodbc.so.2 || true
 
 WORKDIR /app
+
+# 🔥 IMPORTANT FIX
+ENV PYTHONPATH=/app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
