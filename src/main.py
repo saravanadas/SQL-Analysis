@@ -84,7 +84,36 @@ def debug_tcp(authorization: str | None = Header(default=None)):
             "error": str(e),
         }
 
+#Testing
+@app.get("/debug/odbc")
+def debug_odbc():
+    import pyodbc
 
+    try:
+        conn = pyodbc.connect(
+            "Driver={ODBC Driver 18 for SQL Server};"
+            "Server=railtail-production-d464.up.railway.app,1433;"
+            "UID=sqlprd_acct_ai;"
+            "PWD=Bolthou$#99ai;"
+            "Encrypt=yes;"
+            "TrustServerCertificate=yes;"
+            "Connection Timeout=10;"
+        )
+
+        cursor = conn.cursor()
+        row = cursor.execute("SELECT @@SERVERNAME").fetchone()
+
+        return {
+            "ok": True,
+            "server": row[0]
+        }
+
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": str(e)
+        }
+        
 @app.get("/debug/sql")
 def debug_sql(authorization: str | None = Header(default=None)):
     _check_debug_auth(authorization)
