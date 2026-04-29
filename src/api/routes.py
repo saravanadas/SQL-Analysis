@@ -102,7 +102,7 @@ def job_status(job_id: str):
     """
     job = job_manager.get_job(job_id)
 
-    if "error" in job:
+    if job.get("error") == "Job not found":
         raise HTTPException(status_code=404, detail="Job not found")
 
     return job
