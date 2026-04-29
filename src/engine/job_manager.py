@@ -67,7 +67,7 @@ class JobManager:
     def get_job(self, job_id):
         with self.engine.connect() as conn:
             result = conn.execute(text("""
-                SELECT job_id, status, result, error, created_at
+                SELECT job_id, status, result, error, created_date
                 FROM jobs
                 WHERE job_id = :job_id
             """), {"job_id": job_id}).fetchone()
@@ -82,5 +82,5 @@ class JobManager:
             "status": result.status,
             "result": json.loads(result.result) if result.result else None,
             "error": result.error,
-            "created_at": str(result.created_at)
+            "created_at": str(result.created_date)
         }
