@@ -51,7 +51,9 @@ class SQLServerClient:
 
         try:
             with self.engine.connect().execution_options(timeout=300) as conn:
-                return pd.read_sql(query, conn, chunksize=chunksize)
+                for chunk in pd.read_sql(query, conn, chunksize=chunksize):
+                    yield chunk
+
 
         except Exception as e:
             logger.error(f"Query failed: {str(e)}")
