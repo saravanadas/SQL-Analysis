@@ -17,11 +17,12 @@ class SQLServerClient:
     def __init__(self):
         # Format the connection string for PyODBC
         params = urllib.parse.quote_plus(
-            f"DRIVER={{ODBC Driver 18 for SQL Server}};"
+            f"DRIVER={{{settings.db_driver}}};"
             f"SERVER={settings.sql_server_host},{settings.sql_server_port};"
             f"DATABASE={settings.sql_server_db};"
             f"UID={settings.sql_server_user};"
             f"PWD={settings.sql_server_password};"
+            f"Encrypt=yes;"
             f"TrustServerCertificate=yes;" # Necessary if on-prem lacks proper SSL
         )
         self.connection_string = f"mssql+pyodbc:///?odbc_connect={params}"
