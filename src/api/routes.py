@@ -1,4 +1,6 @@
-from fastapi import APIRouter, HTTPException
+import os
+import mimetypes
+from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 from src.engine.job_manager import JobManager
 from src.services.sql_server_client import SQLServerClient
@@ -15,6 +17,11 @@ job_manager = JobManager()
 file_manager = FileManager()
 logger = setup_logger(__name__)
 
+def require_api_token(authorization: str | None):
+    expected = os.getenv("API_TOKEN")
+    if expected and authorization != f"Bearer {expected}":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
 @router.get("/health")
 def health():
     return {"status": "ok"}
@@ -25,13 +32,16 @@ class LoadRequest(BaseModel):
 
 
 @router.post("/load-to-railway")
-def load_to_railway_api(request: LoadRequest):
+def load_to_railway_api(request: LoadRequest, authorization: str | None = Header(default=None)):
     """
     API to trigger SQL Server → Railway DB pipeline.
     """
     try:
+        require_api_token(authorization)
         result = load_sql_to_railway(request.query, request.table_name)
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
         
@@ -73,11 +83,12 @@ def process_sql_job(query):
 
 
 @router.post("/extract/sql")
-def extract_sql(req: SQLRequest):
+def extract_sql(req: SQLRequest, authorization: str | None = Header(default=None)):
     """
     Starts async SQL extraction job
     """
     try:
+        require_api_token(authorization)
         if not req.query or not req.query.strip():
             raise HTTPException(status_code=400, detail="Query cannot be empty")
 
@@ -90,6 +101,8 @@ def extract_sql(req: SQLRequest):
             "status": "started"
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[API] extract_sql failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -102,14 +115,15 @@ def job_status(job_id: str):
     """
     job = job_manager.get_job(job_id)
 
-    if job.get("error") == "Job not found":
+    if "error" in job:
         raise HTTPException(status_code=404, detail="Job not found")
 
     return job
     
 @router.get("/test-sharepoint")
-def test_sharepoint():
+def test_sharepoint(authorization: str | None = Header(default=None)):
     try:
+        require_api_token(authorization)
         sp = SharePointClient()
 
         # ONLY TOKEN TEST (FAST)
@@ -120,6 +134,8 @@ def test_sharepoint():
             "message": "SharePoint auth working"
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         return {"error": str(e)}
 
@@ -141,11 +157,13 @@ def download(file_id: str, token: str):
             raise HTTPException(status_code=404, detail="File not found or expired")
             
         logger.info(f"[API] File download: {file_id}")
+        download_name = os.path.basename(file_path)
+        media_type = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
 
         return FileResponse(
             path=file_path,
-            filename=f"{file_id}.csv",
-            media_type="text/csv"
+            filename=download_name,
+            media_type=media_type
         )
 
     except HTTPException:
