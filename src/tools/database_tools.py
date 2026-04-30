@@ -71,6 +71,35 @@ def register_database_tools(mcp: FastMCP):
     """Registers database-related tools to the FastMCP instance."""
 
     @mcp.tool()
+    def query_sql_server(query: str) -> str:
+        """
+        Executes a SELECT query on the SQL Server source database and returns
+        a small markdown preview of the results.
+        """
+        validate_query(query)
+
+        sql_client = get_sql_client()
+
+        try:
+            chunks = sql_client.execute_query_to_dataframe(query, chunksize=1000)
+            first_chunk = next(chunks, None)
+
+            if first_chunk is None or first_chunk.empty:
+                return "Query returned no results."
+
+            summary = f"Query returned at least {len(first_chunk)} rows in the first chunk.\n\n"
+            summary += first_chunk.head(10).to_markdown(index=False)
+
+            if len(first_chunk) > 10:
+                summary += f"\n\n... and {len(first_chunk) - 10} more rows in the first chunk."
+
+            return summary
+        except Exception as e:
+            logger.error(f"SQL Server query tool failed: {str(e)}")
+            return f"Error executing SQL Server query: {str(e)}"
+
+
+    @mcp.tool()
     def extract_sql_to_csv(query: str) -> str:
         """
         Executes a given SQL query on the on-premises SQL Server and exports the results to a CSV file.
