@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     sql_server_db: str = Field(..., env="SQL_SERVER_DB")
     sql_server_user: str = Field(..., env="SQL_SERVER_USER")
     sql_server_password: str = Field(..., env="SQL_SERVER_PASSWORD")
+    db_driver: str = Field("ODBC Driver 18 for SQL Server", env="DB_DRIVER")
 
     # =========================
     # Railway Staging DB
