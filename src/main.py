@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
 from fastmcp import FastMCP
@@ -16,9 +17,6 @@ from fastapi import Header, HTTPException
 
 logger = setup_logger(__name__)
 
-app = FastAPI(title="Unified SQL MCP", version="1.0.0")
-app.include_router(router)
-
 def create_mcp() -> FastMCP:
     mcp = FastMCP("UnifiedDataMCP")
     register_database_tools(mcp)
@@ -27,10 +25,42 @@ def create_mcp() -> FastMCP:
     return mcp
 
 mcp = create_mcp()
+mcp_app = mcp.http_app(path="/mcp")
+
+# Cleanup job
+def cleanup_job():
+    try:
+        fm = FileManager()
+        fm.cleanup_old_files(hours=1)
+        logger.info("Background cleanup completed successfully.")
+    except Exception as e:
+        logger.error(f"Background cleanup failed: {str(e)}")
+
+# Scheduler lifecycle
+scheduler = BackgroundScheduler()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    scheduler.add_job(cleanup_job, 'interval', hours=1, id="cleanup_job", replace_existing=True)
+    scheduler.start()
+    logger.info("Scheduler started")
+
+    try:
+        async with mcp_app.lifespan(app):
+            yield
+    finally:
+        try:
+            scheduler.shutdown()
+            logger.info("Scheduler stopped")
+        except Exception:
+            pass
+
+app = FastAPI(title="Unified SQL MCP", version="1.0.0", lifespan=lifespan)
+app.include_router(router)
 
 # Mount MCP safely
 try:
-    app.mount("/mcp", mcp.http_app())
+    app.mount("/mcp", mcp_app)
     logger.info("MCP mounted successfully at /mcp")
 except Exception as e:
     logger.error(f"MCP mount failed: {str(e)}")
@@ -86,31 +116,51 @@ def debug_tcp(authorization: str | None = Header(default=None)):
 
 #Testing
 @app.get("/debug/odbc")
-def debug_odbc():
+def debug_odbc(authorization: str | None = Header(default=None)):
+    _check_debug_auth(authorization)
     import pyodbc
 
+    host = os.getenv("SQL_SERVER_HOST")
+    port = os.getenv("SQL_SERVER_PORT", "1433")
+    db = os.getenv("SQL_SERVER_DB")
+    user = os.getenv("SQL_SERVER_USER")
+    password = os.getenv("SQL_SERVER_PASSWORD")
+    driver = os.getenv("DB_DRIVER", "ODBC Driver 18 for SQL Server")
+
+    conn_str = (
+        f"Driver={{{driver}}};"
+        f"Server={host},{port};"
+        f"Database={db};"
+        f"UID={user};"
+        f"PWD={password};"
+        "Encrypt=yes;"
+        "TrustServerCertificate=yes;"
+        "Connection Timeout=10;"
+    )
+
     try:
-        conn = pyodbc.connect(
-            "Driver={ODBC Driver 18 for SQL Server};"
-            "Server=railtail-production-d464.up.railway.app,1433;"
-            "UID=sqlprd_acct_ai;"
-            "PWD=Bolthou$#99ai;"
-            "Encrypt=yes;"
-            "TrustServerCertificate=yes;"
-            "Connection Timeout=10;"
-        )
+        conn = pyodbc.connect(conn_str)
 
         cursor = conn.cursor()
         row = cursor.execute("SELECT @@SERVERNAME").fetchone()
+        cursor.close()
+        conn.close()
 
         return {
             "ok": True,
-            "server": row[0]
+            "server": row[0],
+            "host": host,
+            "port": port,
+            "database": db,
         }
 
     except Exception as e:
         return {
             "ok": False,
+            "host": host,
+            "port": port,
+            "database": db,
+            "error_type": e.__class__.__name__,
             "error": str(e)
         }
         
@@ -125,7 +175,7 @@ def debug_sql(authorization: str | None = Header(default=None)):
     password = os.getenv("SQL_SERVER_PASSWORD")
 
     conn_str = (
-        "DRIVER={ODBC Driver 18 for SQL Server};"
+        f"DRIVER={{{os.getenv('DB_DRIVER', 'ODBC Driver 18 for SQL Server')}}};"
         f"SERVER={host},{port};"
         f"DATABASE={db};"
         f"UID={user};"
@@ -159,32 +209,6 @@ def debug_sql(authorization: str | None = Header(default=None)):
             "error_type": e.__class__.__name__,
             "error": str(e),
         }
-
-# Cleanup job
-def cleanup_job():
-    try:
-        fm = FileManager()
-        fm.cleanup_old_files(hours=1)
-        logger.info("Background cleanup completed successfully.")
-    except Exception as e:
-        logger.error(f"Background cleanup failed: {str(e)}")
-
-# Scheduler lifecycle
-scheduler = BackgroundScheduler()
-
-@app.on_event("startup")
-def start_scheduler():
-    scheduler.add_job(cleanup_job, 'interval', hours=1)
-    scheduler.start()
-    logger.info("Scheduler started")
-
-@app.on_event("shutdown")
-def shutdown_scheduler():
-    try:
-        scheduler.shutdown()
-        logger.info("Scheduler stopped")
-    except Exception:
-        pass
 
 def main():
     port = int(os.environ.get("PORT", 8000))
