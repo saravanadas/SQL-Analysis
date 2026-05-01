@@ -48,7 +48,7 @@ class SharePointClient:
             "Authorization": f"Bearer {self.token}"
         }
 
-    def list_files(self, folder_path: str = ""):
+    def list_files(self, folder_path: str = "", max_items: int = 200):
         """
         List files in a SharePoint folder (with pagination support)
         LIMITED to avoid timeout in Railway
@@ -66,8 +66,6 @@ class SharePointClient:
         files = []
 
         # ✅ LIMIT results to avoid timeout
-        max_items = 20
-
         while url and len(files) < max_items:
             logger.info(f"[DEBUG] Calling SharePoint API: {url}")
 
@@ -89,7 +87,37 @@ class SharePointClient:
             url = data.get("@odata.nextLink")
 
         logger.info(f"Retrieved {len(files)} files from SharePoint")
-        return files
+        return files[:max_items]
+
+    def list_files_recursive(self, folder_path: str = "", max_items: int = 1000):
+        """
+        Recursively lists files and folders under a SharePoint folder.
+        Adds a `_path` key to each returned item with the path relative to the
+        requested folder.
+        """
+        results = []
+
+        def walk(current_path: str):
+            if len(results) >= max_items:
+                return
+
+            items = self.list_files(current_path, max_items=max_items)
+
+            for item in items:
+                if len(results) >= max_items:
+                    break
+
+                item_path = f"{current_path}/{item['name']}" if current_path else item["name"]
+                enriched = dict(item)
+                enriched["_path"] = item_path
+                results.append(enriched)
+
+                if "folder" in item:
+                    walk(item_path)
+
+        walk(folder_path)
+        logger.info(f"Recursively retrieved {len(results)} SharePoint items from '{folder_path}'")
+        return results
 
     def download_file(self, download_url: str):
         """
