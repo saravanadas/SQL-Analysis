@@ -10,6 +10,19 @@ from src.services.railway_db_client import RailwayDBClient
 
 logger = setup_logger(__name__)
 
+SHAREPOINT_TOOL_NAMES = [
+    "ingest_sharepoint_invoice_pdfs_to_railway",
+    "ingest_invoice_pdfs",
+    "search_sharepoint_pdfs_recursive",
+    "extract_sharepoint_pdf_text",
+    "stage_sharepoint_pdf_text_to_railway",
+    "stage_invoice_lines_to_railway",
+    "list_sharepoint_files",
+    "download_sharepoint_file",
+    "download_sharepoint_folder",
+    "sharepoint_to_railway",
+]
+
 # =========================================================
 # FIX: Lazy initialization
 # =========================================================
@@ -84,6 +97,96 @@ def _metadata_from_item(item, status: str, page_count: int = 0, error_message: s
         "error_message": error_message[:2000] if error_message else None,
     }
 
+def _ingest_invoice_pdf_text(
+    folder_path: str,
+    batch_number: str,
+    max_files: int,
+    force_reprocess: bool,
+    pdf_text_table: str,
+    file_table: str
+):
+    sp_client = get_sp_client()
+    file_manager = get_file_manager()
+    railway_client = get_railway_client()
+
+    items = sp_client.list_files_recursive(folder_path, max_items=max_files * 10)
+    batch_filter = batch_number.strip().lower()
+    pdf_items = [item for item in items if _is_invoice_pdf_item(item, batch_filter=batch_filter)]
+    pdf_items = pdf_items[:max_files]
+
+    processed = 0
+    skipped = 0
+    failed = 0
+    page_rows = 0
+    messages = []
+
+    for item in pdf_items:
+        file_id = item["id"]
+        existing = railway_client.get_invoice_file_record(file_id, table_name=file_table)
+
+        if (
+            existing
+            and not force_reprocess
+            and existing.last_modified == item.get("lastModifiedDateTime")
+            and existing.file_size == item.get("size")
+            and existing.extraction_status == "success"
+        ):
+            skipped += 1
+            continue
+
+        try:
+            _, pdf_path = _download_sharepoint_file_to_path(
+                sp_client,
+                file_manager,
+                file_id,
+                item["name"]
+            )
+            pages = _extract_pdf_pages(pdf_path)
+            rows = [
+                {
+                    "file_id": file_id,
+                    "file_name": item["name"],
+                    "sharepoint_path": item.get("_path", item["name"]),
+                    "page_number": page["page_number"],
+                    "page_text": page["page_text"],
+                }
+                for page in pages
+            ]
+
+            inserted = railway_client.store_pdf_text_rows(rows, table_name=pdf_text_table)
+            railway_client.upsert_invoice_file_record(
+                _metadata_from_item(item, status="success", page_count=len(pages)),
+                table_name=file_table
+            )
+            processed += 1
+            page_rows += inserted
+
+        except Exception as e:
+            failed += 1
+            error_message = str(e)
+            railway_client.upsert_invoice_file_record(
+                _metadata_from_item(item, status="failed", error_message=error_message),
+                table_name=file_table
+            )
+            messages.append(f"- Failed: {item.get('_path', item['name'])}: {error_message}")
+            logger.error(f"Invoice PDF ingestion failed for {item.get('_path', item['name'])}: {error_message}")
+
+    result = (
+        f"Invoice PDF ingestion completed.\n"
+        f"PDF candidates: {len(pdf_items)}\n"
+        f"Processed: {processed}\n"
+        f"Skipped unchanged: {skipped}\n"
+        f"Failed: {failed}\n"
+        f"PDF page text rows stored: {page_rows}\n"
+        f"Metadata table: {file_table}\n"
+        f"PDF text table: {pdf_text_table}"
+    )
+
+    if messages:
+        result += "\n\nFailures:\n" + "\n".join(messages[:20])
+
+    return result
+
 
 def register_sharepoint_tools(mcp: FastMCP):
     """Registers SharePoint file management tools to the FastMCP instance."""
@@ -102,87 +205,35 @@ def register_sharepoint_tools(mcp: FastMCP):
         stores it in PostgreSQL, and tracks processed files so future requests
         can query PostgreSQL instead of reparsing every PDF.
         """
-        sp_client = get_sp_client()
-        file_manager = get_file_manager()
-        railway_client = get_railway_client()
-
-        items = sp_client.list_files_recursive(folder_path, max_items=max_files * 10)
-        batch_filter = batch_number.strip().lower()
-        pdf_items = [item for item in items if _is_invoice_pdf_item(item, batch_filter=batch_filter)]
-        pdf_items = pdf_items[:max_files]
-
-        processed = 0
-        skipped = 0
-        failed = 0
-        page_rows = 0
-        messages = []
-
-        for item in pdf_items:
-            file_id = item["id"]
-            existing = railway_client.get_invoice_file_record(file_id, table_name=file_table)
-
-            if (
-                existing
-                and not force_reprocess
-                and existing.last_modified == item.get("lastModifiedDateTime")
-                and existing.file_size == item.get("size")
-                and existing.extraction_status == "success"
-            ):
-                skipped += 1
-                continue
-
-            try:
-                _, pdf_path = _download_sharepoint_file_to_path(
-                    sp_client,
-                    file_manager,
-                    file_id,
-                    item["name"]
-                )
-                pages = _extract_pdf_pages(pdf_path)
-                rows = [
-                    {
-                        "file_id": file_id,
-                        "file_name": item["name"],
-                        "sharepoint_path": item.get("_path", item["name"]),
-                        "page_number": page["page_number"],
-                        "page_text": page["page_text"],
-                    }
-                    for page in pages
-                ]
-
-                inserted = railway_client.store_pdf_text_rows(rows, table_name=pdf_text_table)
-                railway_client.upsert_invoice_file_record(
-                    _metadata_from_item(item, status="success", page_count=len(pages)),
-                    table_name=file_table
-                )
-                processed += 1
-                page_rows += inserted
-
-            except Exception as e:
-                failed += 1
-                error_message = str(e)
-                railway_client.upsert_invoice_file_record(
-                    _metadata_from_item(item, status="failed", error_message=error_message),
-                    table_name=file_table
-                )
-                messages.append(f"- Failed: {item.get('_path', item['name'])}: {error_message}")
-                logger.error(f"Invoice PDF ingestion failed for {item.get('_path', item['name'])}: {error_message}")
-
-        result = (
-            f"Invoice PDF ingestion completed.\n"
-            f"PDF candidates: {len(pdf_items)}\n"
-            f"Processed: {processed}\n"
-            f"Skipped unchanged: {skipped}\n"
-            f"Failed: {failed}\n"
-            f"PDF page text rows stored: {page_rows}\n"
-            f"Metadata table: {file_table}\n"
-            f"PDF text table: {pdf_text_table}"
+        return _ingest_invoice_pdf_text(
+            folder_path=folder_path,
+            batch_number=batch_number,
+            max_files=max_files,
+            force_reprocess=force_reprocess,
+            pdf_text_table=pdf_text_table,
+            file_table=file_table,
         )
 
-        if messages:
-            result += "\n\nFailures:\n" + "\n".join(messages[:20])
 
-        return result
+    @mcp.tool()
+    def ingest_invoice_pdfs(
+        folder_path: str,
+        batch_number: str = "",
+        max_files: int = 200,
+        force_reprocess: str = "false"
+    ) -> str:
+        """
+        Short alias for ingesting SharePoint invoice PDFs into PostgreSQL.
+        Uses default tables sharepoint_pdf_text and sharepoint_invoice_files.
+        """
+        return _ingest_invoice_pdf_text(
+            folder_path=folder_path,
+            batch_number=batch_number,
+            max_files=max_files,
+            force_reprocess=force_reprocess.strip().lower() in {"1", "true", "yes", "y"},
+            pdf_text_table="sharepoint_pdf_text",
+            file_table="sharepoint_invoice_files",
+        )
 
 
     @mcp.tool()
