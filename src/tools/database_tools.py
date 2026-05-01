@@ -9,6 +9,13 @@ import os
 
 logger = setup_logger(__name__)
 
+DATABASE_TOOL_NAMES = [
+    "query_sql_server",
+    "extract_sql_to_csv",
+    "stage_sql_to_railway",
+    "query_analytical_db",
+]
+
 # =========================
 # FIX: Lazy initialization
 # =========================
