@@ -6,6 +6,8 @@ from fastmcp import FastMCP
 from src.utils.logger import setup_logger
 from src.tools.database_tools import register_database_tools
 from src.tools.sharepoint_tools import register_sharepoint_tools
+from src.tools.database_tools import DATABASE_TOOL_NAMES
+from src.tools.sharepoint_tools import SHAREPOINT_TOOL_NAMES
 from src.api.routes import router
 from apscheduler.schedulers.background import BackgroundScheduler
 from src.services.file_manager import FileManager
@@ -69,6 +71,15 @@ except Exception as e:
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+@app.get("/debug/tools")
+def debug_tools(authorization: str | None = Header(default=None)):
+    _check_debug_auth(authorization)
+    tools = DATABASE_TOOL_NAMES + SHAREPOINT_TOOL_NAMES
+    return {
+        "tool_count": len(tools),
+        "tools": tools,
+    }
     
 #For Testing
 def _check_debug_auth(authorization: str | None):
