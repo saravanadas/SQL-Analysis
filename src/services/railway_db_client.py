@@ -161,6 +161,89 @@ class RailwayDBClient:
         with self.engine.begin() as conn:
             conn.execute(text(query))
 
+    def ensure_invoice_file_table(self, table_name: str = "sharepoint_invoice_files"):
+        """
+        Creates a table for SharePoint PDF file metadata and extraction status.
+        """
+        table_name = _validate_table_name(table_name)
+        query = f"""
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            file_id TEXT PRIMARY KEY,
+            file_name TEXT NOT NULL,
+            sharepoint_path TEXT,
+            last_modified TEXT,
+            file_size BIGINT,
+            etag TEXT,
+            page_count INTEGER,
+            extraction_status TEXT,
+            error_message TEXT,
+            processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+
+        with self.engine.begin() as conn:
+            conn.execute(text(query))
+
+    def get_invoice_file_record(self, file_id: str, table_name: str = "sharepoint_invoice_files"):
+        """
+        Returns stored SharePoint file metadata for a PDF, if present.
+        """
+        table_name = _validate_table_name(table_name)
+        self.ensure_invoice_file_table(table_name)
+
+        with self.engine.connect() as conn:
+            return conn.execute(
+                text(f"SELECT file_id, last_modified, file_size, etag, extraction_status FROM {table_name} WHERE file_id = :file_id"),
+                {"file_id": file_id}
+            ).fetchone()
+
+    def upsert_invoice_file_record(self, record: dict, table_name: str = "sharepoint_invoice_files"):
+        """
+        Inserts or updates SharePoint PDF file metadata and processing status.
+        """
+        table_name = _validate_table_name(table_name)
+        self.ensure_invoice_file_table(table_name)
+
+        query = f"""
+        INSERT INTO {table_name} (
+            file_id,
+            file_name,
+            sharepoint_path,
+            last_modified,
+            file_size,
+            etag,
+            page_count,
+            extraction_status,
+            error_message,
+            processed_at
+        )
+        VALUES (
+            :file_id,
+            :file_name,
+            :sharepoint_path,
+            :last_modified,
+            :file_size,
+            :etag,
+            :page_count,
+            :extraction_status,
+            :error_message,
+            CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (file_id) DO UPDATE SET
+            file_name = EXCLUDED.file_name,
+            sharepoint_path = EXCLUDED.sharepoint_path,
+            last_modified = EXCLUDED.last_modified,
+            file_size = EXCLUDED.file_size,
+            etag = EXCLUDED.etag,
+            page_count = EXCLUDED.page_count,
+            extraction_status = EXCLUDED.extraction_status,
+            error_message = EXCLUDED.error_message,
+            processed_at = CURRENT_TIMESTAMP
+        """
+
+        with self.engine.begin() as conn:
+            conn.execute(text(query), record)
+
     def store_pdf_text_rows(self, rows, table_name: str = "sharepoint_pdf_text") -> int:
         """
         Stores extracted PDF page text rows in PostgreSQL.
