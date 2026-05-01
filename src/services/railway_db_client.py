@@ -1,11 +1,17 @@
 from sqlalchemy import create_engine
 import pandas as pd
+import re
 from src.config.settings import settings
 from src.utils.logger import setup_logger
 from src.utils.retry import retry
 from sqlalchemy import text
 
 logger = setup_logger(__name__)
+
+def _validate_table_name(table_name: str) -> str:
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table_name or ""):
+        raise ValueError("Invalid table name")
+    return table_name
 
 class RailwayDBClient:
     """
@@ -134,6 +140,55 @@ class RailwayDBClient:
 
         with self.engine.begin() as conn:
             conn.execute(text(query), {"file_name": file_name})
+
+    def ensure_pdf_text_table(self, table_name: str = "sharepoint_pdf_text"):
+        """
+        Creates a table for extracted SharePoint PDF page text.
+        """
+        table_name = _validate_table_name(table_name)
+        query = f"""
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            file_id TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            sharepoint_path TEXT,
+            page_number INTEGER NOT NULL,
+            page_text TEXT,
+            extracted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (file_id, page_number)
+        )
+        """
+
+        with self.engine.begin() as conn:
+            conn.execute(text(query))
+
+    def store_pdf_text_rows(self, rows, table_name: str = "sharepoint_pdf_text") -> int:
+        """
+        Stores extracted PDF page text rows in PostgreSQL.
+        """
+        if not rows:
+            return 0
+
+        table_name = _validate_table_name(table_name)
+        self.ensure_pdf_text_table(table_name)
+        df = pd.DataFrame(rows)
+        file_ids = sorted({row["file_id"] for row in rows})
+
+        with self.engine.begin() as conn:
+            for file_id in file_ids:
+                conn.execute(
+                    text(f"DELETE FROM {table_name} WHERE file_id = :file_id"),
+                    {"file_id": file_id}
+                )
+            df.to_sql(
+                name=table_name,
+                con=conn,
+                if_exists="append",
+                index=False,
+                method="multi",
+                chunksize=500
+            )
+
+        return len(df)
 
     @retry(max_attempts=3, delay=2)
     def execute_query(self, query: str) -> pd.DataFrame:
