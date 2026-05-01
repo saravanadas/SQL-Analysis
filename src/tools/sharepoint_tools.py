@@ -23,9 +23,211 @@ def get_file_manager():
 def get_railway_client():
     return RailwayDBClient()
 
+def _download_sharepoint_file_to_path(sp_client, file_manager, file_id: str, file_name: str):
+    file_metadata = sp_client.get_file_metadata(file_id)
+
+    if "@microsoft.graph.downloadUrl" not in file_metadata:
+        raise Exception("Download URL not found for file")
+
+    extension = os.path.splitext(file_name)[1]
+    local_id = file_manager.generate_file_id()
+    dest_path = file_manager.get_file_path(local_id, extension)
+    content = sp_client.download_file(file_metadata["@microsoft.graph.downloadUrl"])
+
+    with open(dest_path, "wb") as f:
+        f.write(content)
+
+    return local_id, dest_path
+
+def _extract_pdf_pages(pdf_path: str):
+    from pypdf import PdfReader
+
+    reader = PdfReader(pdf_path)
+    pages = []
+
+    for index, page in enumerate(reader.pages, start=1):
+        text = page.extract_text() or ""
+        pages.append({
+            "page_number": index,
+            "page_text": text.strip()
+        })
+
+    return pages
+
 
 def register_sharepoint_tools(mcp: FastMCP):
     """Registers SharePoint file management tools to the FastMCP instance."""
+
+    @mcp.tool()
+    def search_sharepoint_pdfs_recursive(
+        folder_path: str,
+        batch_number: str = "",
+        max_items: int = 1000
+    ) -> str:
+        """
+        Recursively searches SharePoint under a folder and returns PDF files.
+        Excel files and files ending with report.pdf are ignored.
+        """
+        try:
+            sp_client = get_sp_client()
+            items = sp_client.list_files_recursive(folder_path, max_items=max_items)
+
+            matches = []
+            batch_filter = batch_number.strip().lower()
+
+            for item in items:
+                if "file" not in item:
+                    continue
+
+                file_name = item["name"]
+                file_name_lower = file_name.lower()
+                item_path = item.get("_path", file_name)
+
+                if not file_name_lower.endswith(".pdf"):
+                    continue
+                if file_name_lower.endswith("report.pdf"):
+                    continue
+                if batch_filter and batch_filter not in item_path.lower():
+                    continue
+
+                matches.append({
+                    "name": file_name,
+                    "id": item["id"],
+                    "path": item_path
+                })
+
+            if not matches:
+                return "No matching PDF files found."
+
+            result = f"Found {len(matches)} matching PDF file(s):\n"
+            for match in matches[:100]:
+                result += f"- {match['path']} (ID: {match['id']})\n"
+
+            if len(matches) > 100:
+                result += f"\n... and {len(matches) - 100} more files."
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Recursive SharePoint PDF search failed: {str(e)}")
+            raise
+
+
+    @mcp.tool()
+    def extract_sharepoint_pdf_text(file_id: str, file_name: str, max_preview_chars: int = 6000) -> str:
+        """
+        Downloads a SharePoint PDF and extracts server-side text from its pages.
+        Returns a preview suitable for agent parsing.
+        """
+        try:
+            sp_client = get_sp_client()
+            file_manager = get_file_manager()
+
+            local_id, pdf_path = _download_sharepoint_file_to_path(
+                sp_client,
+                file_manager,
+                file_id,
+                file_name
+            )
+            pages = _extract_pdf_pages(pdf_path)
+            combined = "\n\n".join(
+                f"--- Page {page['page_number']} ---\n{page['page_text']}"
+                for page in pages
+            )
+
+            token = generate_token(local_id)
+            download_url = f"{settings.app_base_url}/download/{local_id}?token={token}"
+            preview = combined[:max_preview_chars]
+
+            if len(combined) > max_preview_chars:
+                preview += f"\n\n... truncated {len(combined) - max_preview_chars} characters."
+
+            return (
+                f"Extracted text from '{file_name}' ({len(pages)} page(s)).\n"
+                f"Download Link:\n{download_url}\n\n"
+                f"{preview}"
+            )
+
+        except Exception as e:
+            logger.error(f"SharePoint PDF text extraction failed for file_id={file_id}: {str(e)}")
+            raise
+
+
+    @mcp.tool()
+    def stage_sharepoint_pdf_text_to_railway(
+        file_id: str,
+        file_name: str,
+        sharepoint_path: str = "",
+        table_name: str = "sharepoint_pdf_text"
+    ) -> str:
+        """
+        Downloads a SharePoint PDF, extracts page text, and stores it in PostgreSQL.
+        This gives the agent a server-side PDF extraction path for reconciliation.
+        """
+        try:
+            sp_client = get_sp_client()
+            file_manager = get_file_manager()
+            railway_client = get_railway_client()
+
+            _, pdf_path = _download_sharepoint_file_to_path(
+                sp_client,
+                file_manager,
+                file_id,
+                file_name
+            )
+            pages = _extract_pdf_pages(pdf_path)
+
+            rows = [
+                {
+                    "file_id": file_id,
+                    "file_name": file_name,
+                    "sharepoint_path": sharepoint_path,
+                    "page_number": page["page_number"],
+                    "page_text": page["page_text"],
+                }
+                for page in pages
+            ]
+
+            inserted = railway_client.store_pdf_text_rows(rows, table_name=table_name)
+
+            return (
+                f"Stored {inserted} PDF page text row(s) for '{file_name}' "
+                f"into PostgreSQL table '{table_name}'."
+            )
+
+        except Exception as e:
+            logger.error(f"SharePoint PDF staging failed for file_id={file_id}: {str(e)}")
+            raise
+
+
+    @mcp.tool()
+    def stage_invoice_lines_to_railway(
+        rows: list[dict],
+        table_name: str = "sharepoint_invoice_lines",
+        mode: str = "append"
+    ) -> str:
+        """
+        Stores parsed invoice line dictionaries into PostgreSQL.
+        Use this after the agent extracts invoice number, PO, quantity,
+        unit price, line amount, and source PDF details from PDF text.
+        """
+        try:
+            if mode not in {"append", "replace"}:
+                raise ValueError("mode must be 'append' or 'replace'")
+
+            if not rows:
+                return "No invoice rows provided."
+
+            railway_client = get_railway_client()
+            df = pd.DataFrame(rows)
+            inserted = railway_client.insert_dataframe_chunked(df, table_name, mode=mode)
+
+            return f"Stored {inserted} invoice line row(s) into PostgreSQL table '{table_name}'."
+
+        except Exception as e:
+            logger.error(f"Invoice line staging failed: {str(e)}")
+            raise
+
 
     @mcp.tool()
     def list_sharepoint_files(folder_path: str = "") -> str:
