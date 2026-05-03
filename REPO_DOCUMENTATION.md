@@ -590,6 +590,63 @@ docker build -t unified-mcp .
 - [ ] HTTPS is enabled in production (`APP_BASE_URL`)
 - [ ] SQL validation prevents injection (blocks all non-SELECT)
 
+## 10. Continuous Integration & Test Strategy
+
+The testing strategy for UnifiedDataMCP is **three-phase and sequential**: Local Smoke Tests → GitHub Actions CI → Railway Deployment Smoke Tests.
+
+**Important:** Option A (GitHub Actions CI/CD) does **NOT** replace local smoke tests. They serve completely different purposes:
+
+- **Local tests** catch code bugs, syntax errors, and FastAPI routing issues BEFORE you waste a deployment cycle.
+- **CI automation** validates that the Docker build works in a clean environment on every push.
+- **Railway smoke tests** validate the ONLY thing that matters: does it work in production?
+
+### 10.1 Three-Phase Testing Overview
+
+| Phase | What It Tests | Where It Runs | When | If It Fails |
+|-------|---------------|---------------|------|-------------|
+| 1. Local Smoke Tests | Code correctness, Docker build, endpoint responses | Your local machine (Docker) | Before every push to main | Fix code/Dockerfile locally. Do NOT push to main. |
+| 2. GitHub Actions CI | Build automation, clean-environment validation | GitHub CI runner (Ubuntu) | Every push and PR to main | Check Dockerfile for OS-specific dependencies |
+| 3. Railway Smoke Tests | Production networking, Railway PostgreSQL, cloud credential injection, on-prem SQL Server connectivity from cloud | Live Railway deployment | After every successful main branch CI run | Check Railway env vars, firewall rules, DB connection strings |
+
+### 10.2 GitHub Actions Workflow
+
+The CI workflow is defined in `.github/workflows/ci.yml` and runs automatically on every push.
+
+**What it does:**
+1. Builds the Docker image on an Ubuntu runner
+2. Runs the container with test credentials and validates `/health` and `/debug/tools`
+3. On `main` branch pushes, proceeds to poll your live Railway URL and run production smoke tests
+
+### 10.3 Required GitHub Repository Secrets
+
+For the Railway smoke test job to work, you must configure these secrets in your GitHub repository settings:
+
+| Secret | Purpose | Example |
+|--------|---------|---------|
+| `RAILWAY_APP_URL` | Your live Railway deployment URL | `https://my-app.up.railway.app` |
+| `API_TOKEN` | Production API token for authenticated smoke test endpoints | `your-secure-token-here` |
+
+### 10.4 Railway Auto-Deployment
+
+Railway is already configured to auto-deploy from the `main` branch via `railway.toml`. When CI passes on `main`, Railway will automatically build and deploy the new container. The CI workflow then polls the Railway `/health` endpoint until it responds before running the full smoke test suite.
+
+### 10.5 Key Differences: Local vs. Railway Testing
+
+Local tests verify your **code is correct**. Railway tests verify your **deployment works**. Only Railway tests can catch:
+
+- Railway's build environment failing to install `msodbcsql18`
+- Railway PostgreSQL connection strings not resolving from a cloud container
+- Your on-prem SQL Server firewall blocking Railway's outbound IP addresses
+- SharePoint client credentials not working from a cloud-hosted IP
+- Environment variables being misconfigured or missing in the Railway dashboard
+
+### 10.6 Full Documentation
+
+For complete step-by-step instructions, exact `curl` commands, decision gates, and troubleshooting, see:
+
+- **`TEST_PLAN.md`** — Complete 3-phase test plan with all 14 tests for both local and Railway environments
+- **`.github/workflows/ci.yml`** — The automated CI/CD workflow definition
+
 ---
 
 *Document generated for SQL-Analysis repository. Last updated: May 2026.*

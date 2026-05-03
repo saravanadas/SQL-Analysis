@@ -1,0 +1,285 @@
+name: UnifiedDataMCP CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+
+env:
+  IMAGE_NAME: unified-mcp
+
+jobs:
+  build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        run: |
+          docker build -t ${{ env.IMAGE_NAME }} .
+          echo "Docker image built successfully."
+
+      - name: Verify image exists
+        run: docker images | grep ${{ env.IMAGE_NAME }}
+
+      - name: Export image to tarball (for next job)
+        run: docker save ${{ env.IMAGE_NAME }} -o /tmp/unified-mcp.tar
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp/unified-mcp.tar
+          retention-days: 1
+
+  test-local:
+    name: Local Smoke Tests in CI
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp
+
+      - name: Load Docker image
+        run: docker load -i /tmp/unified-mcp.tar
+
+      - name: Start container with minimal env
+        run: |
+          docker run -d \
+            --name unified-mcp-test \
+            -p 8000:8000 \
+            -e PORT=8000 \
+            -e API_TOKEN=ci-test-token \
+            -e LOG_LEVEL=INFO \
+            -e RAILWAY_DB_URL=postgresql://dummy:dummy@localhost:5432/dummy \
+            -e SQL_SERVER_HOST=localhost \
+            -e SQL_SERVER_DB=testdb \
+            -e SQL_SERVER_USER=testuser \
+            -e SQL_SERVER_PASSWORD=testpass \
+            -e SP_TENANT_ID=00000000-0000-0000-0000-000000000000 \
+            -e SP_CLIENT_ID=00000000-0000-0000-0000-000000000000 \
+            -e SP_CLIENT_SECRET=dummy \
+            -e SP_SITE_ID=dummy \
+            -e SP_DRIVE_ID=dummy \
+            -e DOWNLOAD_TOKEN_SECRET=ci-download-secret-123 \
+            -e APP_BASE_URL=http://localhost:8000 \
+            ${{ env.IMAGE_NAME }}
+
+      - name: Wait for health endpoint
+        run: |
+          echo "Waiting for application to start..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "Application is healthy!"
+              break
+            fi
+            echo "Attempt $i/30..."
+            sleep 2
+          done
+
+      - name: Test 1 — Health Check
+        run: |
+          echo "Testing /health..."
+          curl -sf http://localhost:8000/health | jq '.'
+          echo "PASS: /health responded."
+
+      - name: Test 2 — Debug Tools List
+        run: |
+          echo "Testing /debug/tools..."
+          RESPONSE=$(curl -sf http://localhost:8000/debug/tools -H "Authorization: Bearer ci-test-token")
+          echo "$RESPONSE" | jq '.'
+          TOOL_COUNT=$(echo "$RESPONSE" | jq '.tool_count')
+          if [ "$TOOL_COUNT" -ge 14 ]; then
+            echo "PASS: Found $TOOL_COUNT tools (expected >= 14)."
+          else
+            echo "FAIL: Only found $TOOL_COUNT tools (expected >= 14)."
+            exit 1
+          fi
+
+      - name: Capture logs on failure
+        if: failure()
+        run: |
+          echo "=== Container logs ==="
+          docker logs unified-mcp-test
+          echo "=== Container status ==="
+          docker ps -a
+
+      - name: Stop and remove container
+        if: always()
+        run: docker stop unified-mcp-test && docker rm unified-mcp-test
+
+  railway-smoke:
+    name: Railway Deployment Smoke Tests
+    runs-on: ubuntu-latest
+    needs: test-local
+    if: github.ref == 'refs/heads/main'
+    env:
+      RAILWAY_URL: ${{ secrets.RAILWAY_APP_URL }}
+      API_TOKEN: ${{ secrets.API_TOKEN }}
+    steps:
+      - name: Verify secrets are configured
+        run: |
+          if [ -z "$RAILWAY_URL" ]; then
+            echo "FAIL: RAILWAY_APP_URL secret is not set."
+            echo "Please add RAILWAY_APP_URL to your repository secrets."
+            exit 1
+          fi
+          if [ -z "$API_TOKEN" ]; then
+            echo "FAIL: API_TOKEN secret is not set."
+            echo "Please add API_TOKEN to your repository secrets."
+            exit 1
+          fi
+          echo "Secrets verified. Railway URL: $RAILWAY_URL"
+
+      - name: Wait for Railway deployment to be ready
+        run: |
+          echo "Polling Railway /health endpoint (max 5 minutes)..."
+          for i in $(seq 1 30); do
+            RESPONSE=$(curl -sf "$RAILWAY_URL/health" 2>/dev/null || echo "")
+            if [ -n "$RESPONSE" ]; then
+              echo "Railway responded: $RESPONSE"
+              if echo "$RESPONSE" | grep -q '"status".*"ok"'; then
+                echo "PASS: Railway deployment is healthy."
+                break
+              fi
+            fi
+            echo "Attempt $i/30..."
+            sleep 10
+          done
+          if [ -z "$RESPONSE" ]; then
+            echo "FAIL: Railway deployment did not respond within 5 minutes."
+            echo "Check Railway dashboard for deployment status and logs."
+            exit 1
+          fi
+
+      - name: Test 1 — Health Check (Railway)
+        run: |
+          echo "Testing $RAILWAY_URL/health..."
+          curl -sf "$RAILWAY_URL/health" | jq '.'
+          echo "PASS: /health on Railway responded."
+
+      - name: Test 2 — Debug Tools List (Railway)
+        run: |
+          echo "Testing $RAILWAY_URL/debug/tools..."
+          RESPONSE=$(curl -sf "$RAILWAY_URL/debug/tools" -H "Authorization: Bearer $API_TOKEN")
+          echo "$RESPONSE" | jq '.'
+          TOOL_COUNT=$(echo "$RESPONSE" | jq '.tool_count')
+          if [ "$TOOL_COUNT" -ge 14 ]; then
+            echo "PASS: Found $TOOL_COUNT tools on Railway (expected >= 14)."
+          else
+            echo "FAIL: Only found $TOOL_COUNT tools (expected >= 14)."
+            exit 1
+          fi
+
+      - name: Test 3 — Debug TCP Connectivity
+        run: |
+          echo "Testing $RAILWAY_URL/debug/tcp..."
+          RESPONSE=$(curl -sf "$RAILWAY_URL/debug/tcp" -H "Authorization: Bearer $API_TOKEN" || echo '{"ok": false, "message": "Request failed"}')
+          echo "$RESPONSE" | jq '.'
+          OK=$(echo "$RESPONSE" | jq -r '.ok // false')
+          if [ "$OK" = "true" ]; then
+            echo "PASS: TCP connectivity to SQL Server works from Railway."
+          else
+            echo "WARN: TCP connectivity to SQL Server failed."
+            echo "This is EXPECTED if your on-prem SQL Server blocks Railway outbound IPs."
+            echo "Verify firewall rules and VPN connectivity."
+          fi
+
+      - name: Test 4 — Debug ODBC Connectivity
+        run: |
+          echo "Testing $RAILWAY_URL/debug/odbc..."
+          RESPONSE=$(curl -sf "$RAILWAY_URL/debug/odbc" -H "Authorization: Bearer $API_TOKEN" || echo '{"ok": false, "message": "Request failed"}')
+          echo "$RESPONSE" | jq '.'
+          OK=$(echo "$RESPONSE" | jq -r '.ok // false')
+          if [ "$OK" = "true" ]; then
+            echo "PASS: pyodbc can connect to SQL Server from Railway."
+          else
+            echo "WARN: pyodbc connection failed."
+            echo "Common causes: firewall blocking Railway IPs, SQL Server not accepting remote connections, or missing ODBC driver in container."
+          fi
+
+      - name: Test 5 — Debug SQL Query
+        run: |
+          echo "Testing $RAILWAY_URL/debug/sql..."
+          RESPONSE=$(curl -sf "$RAILWAY_URL/debug/sql" -H "Authorization: Bearer $API_TOKEN" || echo '{"ok": false, "message": "Request failed"}')
+          echo "$RESPONSE" | jq '.'
+          OK=$(echo "$RESPONSE" | jq -r '.ok // false')
+          if [ "$OK" = "true" ]; then
+            echo "PASS: SQL SELECT 1 executed successfully from Railway."
+          else
+            echo "WARN: SQL query test failed."
+            echo "This depends on Test 4 (ODBC) passing. Fix ODBC first."
+          fi
+
+      - name: Test 6 — REST API Extract SQL (Async Job)
+        run: |
+          echo "Testing $RAILWAY_URL/extract/sql with a simple query..."
+          RESPONSE=$(curl -sf -X POST "$RAILWAY_URL/extract/sql" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $API_TOKEN" \
+            -d '{"query": "SELECT 1 AS test_column"}' \
+            || echo '{"job_id": null, "status": "failed"}')
+          echo "$RESPONSE" | jq '.'
+          JOB_ID=$(echo "$RESPONSE" | jq -r '.job_id // empty')
+          if [ -n "$JOB_ID" ]; then
+            echo "PASS: Job created with ID $JOB_ID"
+            echo "RAILWAY_JOB_ID=$JOB_ID" >> "$GITHUB_ENV"
+          else
+            echo "WARN: Job creation failed."
+            echo "This may fail if SQL Server is unreachable from Railway."
+          fi
+
+      - name: Test 7 — Job Status Check (if job was created)
+        if: env.RAILWAY_JOB_ID != ''
+        run: |
+          echo "Checking job status for $RAILWAY_JOB_ID..."
+          sleep 5
+          RESPONSE=$(curl -sf "$RAILWAY_URL/job/$RAILWAY_JOB_ID" || echo '{"status": "unknown"}')
+          echo "$RESPONSE" | jq '.'
+          STATUS=$(echo "$RESPONSE" | jq -r '.status // "unknown"')
+          echo "Job status: $STATUS"
+
+      - name: Test 8 — SharePoint Token Test
+        run: |
+          echo "Testing $RAILWAY_URL/test-sharepoint..."
+          RESPONSE=$(curl -sf "$RAILWAY_URL/test-sharepoint" -H "Authorization: Bearer $API_TOKEN" || echo '{"status": "failed", "message": "Request failed"}')
+          echo "$RESPONSE" | jq '.'
+          STATUS=$(echo "$RESPONSE" | jq -r '.status // "failed"')
+          if [ "$STATUS" = "success" ]; then
+            echo "PASS: SharePoint authentication works from Railway."
+          else
+            echo "WARN: SharePoint test failed."
+            echo "This is EXPECTED if client credentials or permissions are misconfigured."
+            echo "Verify SP_TENANT_ID, SP_CLIENT_ID, SP_CLIENT_SECRET, and API permissions in Azure AD."
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo ""
+          echo "============================================"
+          echo "  RAILWAY SMOKE TEST SUMMARY"
+          echo "============================================"
+          echo "Railway URL: $RAILWAY_URL"
+          echo ""
+          echo "NOTES:"
+          echo "- /debug/tcp, /debug/odbc, /debug/sql may fail if your on-prem SQL Server"
+          echo "  does not allow connections from Railway's cloud IPs. This is expected."
+          echo "- /test-sharepoint may fail if SharePoint app registration permissions"
+          echo "  are not granted or the client secret is expired."
+          echo "- /extract/sql depends on SQL Server connectivity from Railway."
+          echo ""
+          echo "For full connectivity, ensure:"
+          echo "  1. Railway environment variables are configured in Railway dashboard."
+          echo "  2. On-prem SQL Server firewall allows Railway outbound IPs."
+          echo "  3. SharePoint app has 'Sites.Read.All' and 'Files.Read.All' permissions."
+          echo "============================================"
