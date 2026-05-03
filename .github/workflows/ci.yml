@@ -118,78 +118,23 @@ jobs:
         run: docker stop unified-mcp-test && docker rm unified-mcp-test
 
   # ---------------------------------------------------------------------------
-  # DEPLOY TO RAILWAY
+  # LIVE RAILWAY SMOKE TESTS
+  # Railway auto-deploys on every push to main via native GitHub integration.
+  # This job runs smoke tests against the already-live Railway deployment.
   # ---------------------------------------------------------------------------
-  # Required GitHub Secrets (add at: Settings > Secrets and variables > Actions):
-  #   RAILWAY_TOKEN      - Get from Railway Dashboard > Account > Tokens
-  #   RAILWAY_PROJECT_ID - Get from Railway Dashboard > Project Settings > General
-  #   API_TOKEN          - Same value as your local .env API_TOKEN (e.g. RlwySQLToken_123)
-  # ---------------------------------------------------------------------------
-  deploy:
-    name: Deploy to Railway
+  railway-smoke:
+    name: Live Railway Smoke Tests
     runs-on: ubuntu-latest
     needs: test-local
     if: github.ref == 'refs/heads/main'
     env:
-      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-      RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      - name: Link Railway project
-        run: railway link --project-id ${{ secrets.RAILWAY_PROJECT_ID }} --environment production
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-
-      - name: Deploy to Railway
-        run: |
-          echo "Deploying to Railway project ${{ secrets.RAILWAY_PROJECT_ID }}..."
-          railway up --detach
-          echo "Deployment triggered successfully."
-
-      - name: Wait for Railway deployment URL
-        id: railway
-        run: |
-          # Allow Railway a moment to spin up the new deployment
-          echo "Waiting 20s for Railway to register deployment..."
-          sleep 20
-          DOMAIN=$(railway domain)
-          echo "Railway domain resolved: $DOMAIN"
-          # Ensure https:// prefix
-          if [[ "$DOMAIN" != http* ]]; then
-            URL="https://$DOMAIN"
-          else
-            URL="$DOMAIN"
-          fi
-          echo "url=$URL" >> $GITHUB_OUTPUT
-          echo "Smoke tests will target: $URL"
-
-    outputs:
-      railway_url: ${{ steps.railway.outputs.url }}
-
-  railway-smoke:
-    name: Railway Deployment Smoke Tests
-    runs-on: ubuntu-latest
-    needs: deploy
-    if: github.ref == 'refs/heads/main'
-    env:
-      RAILWAY_URL: ${{ needs.deploy.outputs.railway_url }}
+      RAILWAY_URL: https://web-production-34c87.up.railway.app
       API_TOKEN: ${{ secrets.API_TOKEN }}
     steps:
-      - name: Verify deployment URL is available
+      - name: Verify Railway deployment URL is set
         run: |
           if [ -z "$RAILWAY_URL" ]; then
-            echo "FAIL: Railway deployment URL is not available."
-            echo "The deploy job may have failed or RAILWAY_TOKEN / RAILWAY_PROJECT_ID secrets are missing."
+            echo "FAIL: RAILWAY_URL is not set."
             exit 1
           fi
           echo "Target Railway URL: $RAILWAY_URL"
@@ -201,7 +146,7 @@ jobs:
             RESPONSE=$(curl -sf "$RAILWAY_URL/health" 2>/dev/null || echo "")
             if [ -n "$RESPONSE" ]; then
               echo "Railway responded: $RESPONSE"
-              if echo "$RESPONSE" | grep -q '"status"."ok"'; then
+              if echo "$RESPONSE" | grep -q '"status":"ok"'; then
                 echo "PASS: Railway deployment is healthy."
                 break
               fi
@@ -321,7 +266,7 @@ jobs:
         run: |
           echo ""
           echo "============================================"
-          echo "  RAILWAY SMOKE TEST SUMMARY"
+          echo "  LIVE RAILWAY SMOKE TEST SUMMARY"
           echo "============================================"
           echo "Railway URL: $RAILWAY_URL"
           echo ""
