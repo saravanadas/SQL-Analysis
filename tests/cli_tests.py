@@ -52,7 +52,7 @@ results: list[dict] = []
 
 def _log(step: int, name: str, status: str, detail: str = "") -> None:
     """Record and print a test result."""
-    icon = {"PASS": "✅", "FAIL": "❌", "SKIP": "⏭️"}.get(status, "❓")
+    icon = {"PASS": "[OK]", "FAIL": "[FAIL]", "SKIP": "[SKIP]"}.get(status, "[?]")
     msg = f"{icon} Step {step:02d}: {name} — {status}"
     if detail:
         msg += f"\n   {detail}"
@@ -174,7 +174,7 @@ def test_extract_sql() -> dict:
     """Step 06: POST /extract/sql — trigger async extraction job.
     Returns the job_id dict so the next test can poll it."""
     if not DEFAULT_API_TOKEN:
-        _log(6, "REST API Extract SQL → CSV", SKIP, "API_TOKEN not set")
+        _log(6, "REST API Extract SQL to CSV", SKIP, "API_TOKEN not set")
         return {}
     payload = {"query": "SELECT 1 AS test_column"}
     try:
@@ -189,13 +189,13 @@ def test_extract_sql() -> dict:
         job_id = data.get("job_id")
         status = data.get("status")
         if job_id and status == "started":
-            _log(6, "REST API Extract SQL → CSV", PASS, f"job_id={job_id}")
+            _log(6, "REST API Extract SQL to CSV", PASS, f"job_id={job_id}")
             return data
         else:
-            _log(6, "REST API Extract SQL → CSV", FAIL, f"Unexpected body: {_print_json(data)}")
+            _log(6, "REST API Extract SQL to CSV", FAIL, f"Unexpected body: {_print_json(data)}")
             return {}
     except Exception as e:
-        _log(6, "REST API Extract SQL → CSV", FAIL, str(e))
+        _log(6, "REST API Extract SQL to CSV", FAIL, str(e))
         return {}
 
 
@@ -274,7 +274,7 @@ def test_sharepoint_auth() -> None:
 def test_load_to_railway() -> None:
     """Step 10: POST /load-to-railway — SQL Server → Railway pipeline."""
     if not DEFAULT_API_TOKEN:
-        _log(10, "SQL → Railway Pipeline", SKIP, "API_TOKEN not set")
+        _log(10, "SQL to Railway Pipeline", SKIP, "API_TOKEN not set")
         return
     payload = {"query": "SELECT 1 AS col_a, 2 AS col_b", "table_name": "smoke_test_staging"}
     try:
@@ -287,11 +287,11 @@ def test_load_to_railway() -> None:
         r.raise_for_status()
         data = r.json()
         if data.get("status") == "success" and isinstance(data.get("rows_loaded"), int):
-            _log(10, "SQL → Railway Pipeline", PASS, f"rows_loaded={data['rows_loaded']}")
+            _log(10, "SQL to Railway Pipeline", PASS, f"rows_loaded={data['rows_loaded']}")
         else:
-            _log(10, "SQL → Railway Pipeline", FAIL, f"Unexpected body: {_print_json(data)}")
+            _log(10, "SQL to Railway Pipeline", FAIL, f"Unexpected body: {_print_json(data)}")
     except Exception as e:
-        _log(10, "SQL → Railway Pipeline", FAIL, str(e))
+        _log(10, "SQL to Railway Pipeline", FAIL, str(e))
 
 
 def test_railway_db_query() -> None:
@@ -397,13 +397,15 @@ def run_all_tests(stop_on_failure: bool = False) -> None:
     print(f"{'='*60}\n")
 
     if failed:
-        print("❌ Smoke tests FAILED. Review the errors above before deploying.")
+        print("[FAILED] Smoke tests FAILED. Review the errors above before deploying.")
         sys.exit(1)
     else:
-        print("✅ All executed smoke tests passed. Ready for Railway deployment!")
+        print("[SUCCESS] All executed smoke tests passed. Ready for Railway deployment!")
 
 
 def main() -> None:
+    global DEFAULT_BASE_URL, DEFAULT_API_TOKEN
+
     parser = argparse.ArgumentParser(description="UnifiedDataMCP Local Smoke Tests")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="Server base URL")
     parser.add_argument("--api-token", default=DEFAULT_API_TOKEN, help="Bearer token")
@@ -412,7 +414,6 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    global DEFAULT_BASE_URL, DEFAULT_API_TOKEN
     DEFAULT_BASE_URL = args.base_url.rstrip("/")
     DEFAULT_API_TOKEN = args.api_token
 

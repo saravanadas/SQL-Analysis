@@ -19,7 +19,9 @@ class FileManager:
     def __init__(self):
         self.output_dir = settings.output_dir
 
-        if not os.path.exists(self.output_dir):
+        if not os.path.isdir(self.output_dir):
+            if os.path.exists(self.output_dir):
+                raise FileExistsError(f"Output path exists but is not a directory: {self.output_dir}")
             os.makedirs(self.output_dir)
             logger.info(f"Created output directory at {self.output_dir}")
 
