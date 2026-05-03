@@ -13,6 +13,22 @@
 **Goal:** Verify the app starts, endpoints respond, and code logic is correct.
 **Prerequisites:** Docker installed, .env file configured with real credentials.
 
+### Automated Test Runner (Recommended)
+Instead of running curl commands manually, use the Python smoke test suite:
+```bash
+# Set your API token in the environment
+$env:API_TOKEN = "your-api-token-here"
+
+# Run the full suite against a running local server
+python tests/cli_tests.py
+
+# Override defaults via CLI
+python tests/cli_tests.py --base-url http://localhost:8000 --api-token mytoken
+
+# Or run with pytest
+pytest tests/cli_tests.py -v
+```
+
 ### Step 1: Build Docker Image
 ```bash
 cd SQL-Analysis
