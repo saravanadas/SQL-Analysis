@@ -16,7 +16,8 @@ from src.services.file_manager import FileManager
 import socket
 import pyodbc
 from fastapi import Header, HTTPException
-
+from src.config.settings import settings
+from sqlalchemy import create_engine, text
 logger = setup_logger(__name__)
 
 def create_mcp() -> FastMCP:
@@ -219,6 +220,35 @@ def debug_sql(authorization: str | None = Header(default=None)):
             "database": db,
             "error_type": e.__class__.__name__,
             "error": str(e),
+        }
+
+
+@app.get("/debug/railway")
+def debug_railway(authorization: str | None = Header(default=None)):
+    """Test Railway PostgreSQL analytical DB connectivity via SELECT 1."""
+    _check_debug_auth(authorization)
+
+    db_url = settings.railway_db_url if hasattr(settings, "railway_db_url") else os.getenv("RAILWAY_DB_URL", "")
+
+    try:
+        engine = create_engine(db_url, pool_pre_ping=True, connect_args={"connect_timeout": 10})
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT 1 AS railway_ok"))
+            row = result.fetchone()
+
+        return {
+            "ok": True,
+            "message": "Railway PostgreSQL connection working",
+            "value": row[0] if row else None,
+            "url_prefix": db_url[:40] + "..." if db_url else "",
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "message": "Railway PostgreSQL connection failed",
+            "error_type": e.__class__.__name__,
+            "error": str(e),
+            "url_prefix": db_url[:40] + "..." if db_url else "",
         }
 
 def main():

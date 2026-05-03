@@ -294,12 +294,25 @@ def test_load_to_railway() -> None:
         _log(10, "SQL to Railway Pipeline", FAIL, str(e))
 
 
-def test_railway_db_query() -> None:
-    """Step 11: GET /debug/railway — query the Railway analytical DB (if endpoint exists).
-    NOTE: This endpoint is not defined in the current codebase, but the MCP tool
-    `query_analytical_db` is available. We test it indirectly via /debug/tools
-    presence and skip gracefully if no REST equivalent exists yet."""
-    _log(11, "Railway Analytical DB Query", SKIP, "No dedicated REST endpoint yet (use MCP tool)")
+def test_debug_railway() -> None:
+    """Step 11: GET /debug/railway — test Railway PostgreSQL connectivity via SELECT 1."""
+    if not DEFAULT_API_TOKEN:
+        _log(11, "Railway DB Connectivity", SKIP, "API_TOKEN not set")
+        return
+    try:
+        r = requests.get(_url("/debug/railway"), headers=_headers(), timeout=REQUEST_TIMEOUT)
+        if r.status_code == 401:
+            _log(11, "Railway DB Connectivity", FAIL, "Unauthorized (401)")
+            return
+        r.raise_for_status()
+        payload = r.json()
+        if payload.get("ok"):
+            _log(11, "Railway DB Connectivity", PASS, f"value={payload.get('value')}")
+        else:
+            err = payload.get("error", payload)
+            _log(11, "Railway DB Connectivity", WARN, f"DB connection failed: {err}")
+    except Exception as e:
+        _log(11, "Railway DB Connectivity", FAIL, str(e))
 
 
 # ═══════════════════════════════════════════════
