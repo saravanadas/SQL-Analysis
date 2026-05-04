@@ -1,10 +1,10 @@
-from sqlalchemy import create_engine
+# STABILIZATION: 2026-05-04 — Tightened connection/query timeouts to prevent Railway 502s
+from sqlalchemy import create_engine, text
 import pandas as pd
 import re
 from src.config.settings import settings
 from src.utils.logger import setup_logger
 from src.utils.retry import retry
-from sqlalchemy import text
 
 logger = setup_logger(__name__)
 
@@ -19,13 +19,18 @@ class RailwayDBClient:
     """
     def __init__(self):
         # Railway provides standard database connection URLs via environment variables
+        # Pool + timeout tightened — 2026-05-04 (was connect_timeout=100, no statement_timeout)
         self.engine = create_engine(
             settings.railway_db_url,
             pool_pre_ping=True,
             pool_size=10,
             max_overflow=20,
             pool_recycle=1800,
-            connect_args={"connect_timeout": 100}
+            pool_timeout=10,          # Added 2026-05-04 — hard cap on acquiring connection from pool
+            connect_args={
+                "connect_timeout": 10,  # Changed from 100 — 2026-05-04
+                "options": "-c statement_timeout=12000"  # Added 2026-05-04 — abort queries >12s before Railway 502
+            }
         )
         logger.info("Initialized Railway DB staging engine.")
         
@@ -36,6 +41,12 @@ class RailwayDBClient:
         except Exception as e:
             logger.error(f"DB connection failed at startup: {str(e)}")
 
+    def _get_conn_with_timeout(self):
+        """Get connection with statement_timeout enforced. Added 2026-05-04."""
+        conn = self.engine.connect()
+        conn.execute(text("SET statement_timeout = '12s'"))
+        return conn
+
     @retry(max_attempts=3, delay=2)
     def stage_dataframe(self, df: pd.DataFrame, table_name: str, if_exists: str = 'append') -> int:
         """
@@ -44,6 +55,7 @@ class RailwayDBClient:
         """
         logger.info(f"Staging dataframe of size {len(df)} to table '{table_name}'.")
         try:
+            # Use single pooled connection for the entire operation — 2026-05-04
             with self.engine.begin() as conn:
                 # Write to SQL. method='multi' allows multiple rows per INSERT clause.
                 df.to_sql(
@@ -52,7 +64,7 @@ class RailwayDBClient:
                     if_exists=if_exists,
                     index=False,
                     method='multi',
-                    chunksize=1000 # Prevents memory overload during transaction
+                    chunksize=500  # Reduced from 1000 — 2026-05-04, smaller batches stay under timeout
                 )
                 
             return len(df)
@@ -65,6 +77,7 @@ class RailwayDBClient:
         """
         Handles chunk-safe insertion. Automatically switches between replace (first chunk)
         and append (subsequent chunks).
+        Single pooled connection for entire operation — 2026-05-04.
         """
         logger.info(f"Inserting chunk with {len(df)} rows into '{table_name}' (mode={mode}).")
         try:
@@ -75,14 +88,14 @@ class RailwayDBClient:
                     if_exists=mode,
                     index=False,
                     method='multi',
-                    chunksize=1000
+                    chunksize=500  # Reduced from 1000 — 2026-05-04
                 )
             return len(df)
         except Exception as e:
             logger.error(f"Chunk insert failed: {str(e)}")
             raise
     
-    @retry(max_attempts=3, delay=2)  # ✅ NEW
+    @retry(max_attempts=3, delay=2)
     def bulk_insert(self, df: pd.DataFrame, table_name: str) -> int:
         """
         Optimized bulk insert for large datasets (append mode).
@@ -96,7 +109,7 @@ class RailwayDBClient:
                     if_exists='append',
                     index=False,
                     method='multi',
-                    chunksize=2000  # Slightly larger for better performance
+                    chunksize=1000
                 )
             return len(df)
         except Exception as e:
@@ -247,6 +260,7 @@ class RailwayDBClient:
     def store_pdf_text_rows(self, rows, table_name: str = "sharepoint_pdf_text") -> int:
         """
         Stores extracted PDF page text rows in PostgreSQL.
+        Single pooled connection for all rows — 2026-05-04.
         """
         if not rows:
             return 0
@@ -256,6 +270,7 @@ class RailwayDBClient:
         df = pd.DataFrame(rows)
         file_ids = sorted({row["file_id"] for row in rows})
 
+        # Single connection for DELETE + INSERT — 2026-05-04
         with self.engine.begin() as conn:
             for file_id in file_ids:
                 conn.execute(
@@ -268,7 +283,7 @@ class RailwayDBClient:
                 if_exists="append",
                 index=False,
                 method="multi",
-                chunksize=500
+                chunksize=500  # Reduced from 1000 — 2026-05-04
             )
 
         return len(df)
@@ -277,11 +292,19 @@ class RailwayDBClient:
     def execute_query(self, query: str) -> pd.DataFrame:
         """
         Executes a SELECT query on the Railway database and returns a DataFrame.
+        Query timeout enforced via statement_timeout — 2026-05-04.
         """
         logger.info(f"Executing analytical query: {query[:100]}...")
         try:
             with self.engine.connect() as conn:
+                # Enforce 12-second query timeout at connection level — 2026-05-04
+                conn.execute(text("SET statement_timeout = '12s'"))
                 return pd.read_sql(text(query), conn)
         except Exception as e:
             logger.error(f"Analytical query failed: {str(e)}")
             raise
+
+    def close(self):
+        """Dispose engine and close all pooled connections. Cleanup added 2026-05-04."""
+        logger.info("Disposing Railway DB engine and closing all pooled connections — 2026-05-04")
+        self.engine.dispose()

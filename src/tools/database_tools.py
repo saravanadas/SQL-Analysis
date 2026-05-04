@@ -1,3 +1,8 @@
+# STABILIZATION: 2026-05-04 — Added async staging tool + smaller chunks + time logging
+import time
+import uuid
+import os
+
 from fastmcp import FastMCP
 from src.services.sql_server_client import SQLServerClient
 from src.services.railway_db_client import RailwayDBClient
@@ -5,7 +10,6 @@ from src.services.file_manager import FileManager
 from src.utils.logger import setup_logger
 from src.utils.security import validate_query, generate_token
 from src.config.settings import settings
-import os
 
 logger = setup_logger(__name__)
 
@@ -14,7 +18,12 @@ DATABASE_TOOL_NAMES = [
     "extract_sql_to_csv",
     "stage_sql_to_railway",
     "query_analytical_db",
+    "stage_sql_to_railway_async",  # Added 2026-05-04
 ]
+
+# Background job manager for async staging — added 2026-05-04
+from src.engine.background_jobs import BackgroundJobManager
+job_manager = BackgroundJobManager()
 
 # =========================
 # FIX: Lazy initialization
@@ -84,14 +93,18 @@ def register_database_tools(mcp: FastMCP):
         a small markdown preview of the results.
         """
         validate_query(query)
+        start = time.time()  # Timing added 2026-05-04
 
         sql_client = get_sql_client()
 
         try:
-            chunks = sql_client.execute_query_to_dataframe(query, chunksize=1000)
+            # Reduced chunk to stay under Railway timeout — 2026-05-04
+            chunks = sql_client.execute_query_to_dataframe(query, chunksize=500)
             first_chunk = next(chunks, None)
 
             if first_chunk is None or first_chunk.empty:
+                elapsed = time.time() - start
+                logger.info(f"query_sql_server completed in {elapsed:.1f}s — no results — 2026-05-04")
                 return "Query returned no results."
 
             summary = f"Query returned at least {len(first_chunk)} rows in the first chunk.\n\n"
@@ -100,6 +113,8 @@ def register_database_tools(mcp: FastMCP):
             if len(first_chunk) > 10:
                 summary += f"\n\n... and {len(first_chunk) - 10} more rows in the first chunk."
 
+            elapsed = time.time() - start
+            logger.info(f"query_sql_server completed in {elapsed:.1f}s — 2026-05-04")
             return summary
         except Exception as e:
             logger.error(f"SQL Server query tool failed: {str(e)}")
@@ -119,6 +134,7 @@ def register_database_tools(mcp: FastMCP):
         """
         # Validate query early
         validate_query(query)
+        start = time.time()  # Timing added 2026-05-04
 
         sql_client = get_sql_client()
         file_manager = get_file_manager()
@@ -152,6 +168,9 @@ def register_database_tools(mcp: FastMCP):
         if total_rows == 0:
             return "No data found for the given query."
 
+        elapsed = time.time() - start
+        logger.info(f"extract_sql_to_csv completed in {elapsed:.1f}s — {total_rows} rows — 2026-05-04")
+
         # Generate secure download link
         token = generate_token(file_id)
         download_url = f"{settings.app_base_url}/download/{file_id}?token={token}"
@@ -168,6 +187,21 @@ def register_database_tools(mcp: FastMCP):
         result = load_sql_to_railway(query, target_table)
         return result["message"]
 
+    @mcp.tool()
+    def stage_sql_to_railway_async(query: str, target_table: str) -> str:
+        """
+        Queues a SQL Server -> Railway staging job asynchronously.
+        Returns immediately with a job ID. Use /job/{job_id} to check status.
+        Added 2026-05-04 to prevent 502 timeouts on large transfers.
+        """
+        job_id = str(uuid.uuid4())[:8]
+        
+        def _run_job():
+            return load_sql_to_railway(query, target_table)
+        
+        job_manager.submit_job(job_id, _run_job)
+        return f"Job {job_id} queued. Check /job/{job_id} for status."
+
 
     @mcp.tool()
     def query_analytical_db(query: str) -> str:
@@ -177,6 +211,7 @@ def register_database_tools(mcp: FastMCP):
         """
         # Validate query
         validate_query(query)
+        start = time.time()  # Timing added 2026-05-04
 
         railway_client = get_railway_client()
         
@@ -184,6 +219,8 @@ def register_database_tools(mcp: FastMCP):
             df = railway_client.execute_query(query)
             
             if df.empty:
+                elapsed = time.time() - start
+                logger.info(f"query_analytical_db completed in {elapsed:.1f}s — no results — 2026-05-04")
                 return "Query returned no results."
             
             # For MCP tools, we return a markdown table or summary
@@ -194,6 +231,8 @@ def register_database_tools(mcp: FastMCP):
             if len(df) > 10:
                 summary += f"\n\n... and {len(df) - 10} more rows."
                 
+            elapsed = time.time() - start
+            logger.info(f"query_analytical_db completed in {elapsed:.1f}s — 2026-05-04")
             return summary
         except Exception as e:
             return f"Error executing analytical query: {str(e)}"

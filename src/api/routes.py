@@ -171,3 +171,15 @@ def download(file_id: str, token: str):
     except Exception as e:
         logger.error(f"[API] Download failed: {str(e)}")
         raise HTTPException(status_code=500, detail="Download failed")
+
+from src.engine.background_jobs import BackgroundJobManager  # Added 2026-05-04
+bg_job_manager = BackgroundJobManager()
+
+# Added 2026-05-04 — List all async staging jobs
+@router.get("/jobs")
+def list_jobs():
+    """List all background jobs. Added 2026-05-04."""
+    return {
+        "jobs": bg_job_manager.list_jobs(),
+        "count": len(bg_job_manager._jobs)
+    }
