@@ -9,10 +9,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.1.7
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v3.10.0
 
       - name: Build Docker image
         run: docker build -t unified-mcp .
@@ -24,7 +24,7 @@ jobs:
       RAILWAY_URL: https://web-production-34c87.up.railway.app
       API_TOKEN: ${{ secrets.API_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.1.7
 
       - name: Wait for Railway deployment
         run: sleep 60
