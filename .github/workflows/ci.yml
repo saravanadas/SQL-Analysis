@@ -1,3 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        run: docker build -t unified-mcp .
+        working-directory: ./SQL-Analysis
+
+  railway-smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      RAILWAY_URL: https://web-production-34c87.up.railway.app
+      API_TOKEN: ${{ secrets.API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Wait for Railway deployment
+        run: sleep 60
+
+      - name: Test 1 — Health Check
+        run: |
+          curl -sf "$RAILWAY_URL/health" || curl -sf "$RAILWAY_URL/"
+
+      - name: Test 2 — MCP Tools Registered
+        run: |
+          curl -sf "$RAILWAY_URL/debug/tools" -H "Authorization: Bearer $API_TOKEN"
+
+      - name: Test 3 — SharePoint Auth
+        run: |
+          curl -sf "$RAILWAY_URL/test-sharepoint" -H "Authorization: Bearer $API_TOKEN"
+
+      - name: Test 4 — Railway DB Connectivity
+        run: |
+          RESPONSE=$(curl -sf "$RAILWAY_URL/debug/railway" -H "Authorization: Bearer $API_TOKEN" || echo '{"ok":false}')
+          echo "$RESPONSE" | jq '.'
+
+      - name: Test 5 — SQL Server TCP Reachable
+        run: |
+          RESPONSE=$(curl -sf "$RAILWAY_URL/debug/tcp" -H "Authorization: Bearer $API_TOKEN" || echo '{"ok":false}')
+          echo "$RESPONSE" | jq '.'
+
+      - name: Test 6 — SQL Server ODBC
+        run: |
+          RESPONSE=$(curl -sf "$RAILWAY_URL/debug/odbc" -H "Authorization: Bearer $API_TOKEN" || echo '{"ok":false}')
+          echo "$RESPONSE" | jq '.'
+          echo "NOTE: ODBC may timeout if SQL Server firewall blocks Railway IPs."
+
+      - name: Test 7 — SQL Server Query
+        run: |
+          RESPONSE=$(curl -sf "$RAILWAY_URL/debug/sql" -H "Authorization: Bearer $API_TOKEN" || echo '{"ok":false}')
+          echo "$RESPONSE" | jq '.'
+
+      - name: Test 8 — Extract SQL Job Initiation
+        run: |
+          RESPONSE=$(curl -sf "$RAILWAY_URL/extract/sql" -X POST -H "Authorization: Bearer $API_TOKEN" || echo '{"ok":false}')
+          echo "$RESPONSE" | jq '.'
+
       - name: Test 9 — Debug Railway DB Connectivity
         run: |
           echo "Testing $RAILWAY_URL/debug/railway..."
