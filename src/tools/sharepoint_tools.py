@@ -60,12 +60,56 @@ def _extract_pdf_pages(pdf_path: str):
 
     for index, page in enumerate(reader.pages, start=1):
         text = page.extract_text() or ""
+        clean_text = _sanitize_pdf_text(text)
+
+        if _needs_ocr_fallback(clean_text, page):
+            ocr_text = _extract_page_text_with_ocr(pdf_path, index)
+            if len(ocr_text) > len(clean_text):
+                clean_text = ocr_text
+
         pages.append({
             "page_number": index,
-            "page_text": _sanitize_pdf_text(text)
+            "page_text": clean_text
         })
 
     return pages
+
+
+def _needs_ocr_fallback(text: str, page) -> bool:
+    """
+    Some invoice PDFs contain scanned/image pages with only tiny text fragments
+    in the embedded PDF text layer. OCR those pages so PostgreSQL gets the
+    visible invoice content instead of values like "4973629 10".
+    """
+    if len(text) >= 50:
+        return False
+
+    resources = page.get("/Resources") or {}
+    return "/XObject" in resources
+
+
+def _extract_page_text_with_ocr(pdf_path: str, page_number: int) -> str:
+    try:
+        import fitz
+        import pytesseract
+    except ImportError:
+        logger.warning("OCR fallback dependencies are not installed; keeping extracted PDF text.")
+        return ""
+
+    try:
+        with fitz.open(pdf_path) as document:
+            page = document.load_page(page_number - 1)
+            pixmap = page.get_pixmap(dpi=200, alpha=False)
+            image_bytes = pixmap.tobytes("png")
+
+        from PIL import Image
+        from io import BytesIO
+
+        image = Image.open(BytesIO(image_bytes))
+        return _sanitize_pdf_text(pytesseract.image_to_string(image))
+    except Exception as exc:
+        logger.warning(f"OCR fallback failed for {pdf_path} page {page_number}: {exc}")
+        return ""
 
 
 def _sanitize_pdf_text(text: str) -> str:
