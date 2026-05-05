@@ -15,6 +15,7 @@ RUN apt-get update \
     gnupg \
     unixodbc \
     unixodbc-dev \
+    tesseract-ocr \
  && curl -sSL https://packages.microsoft.com/config/debian/12/packages-microsoft-prod.deb -o /tmp/packages-microsoft-prod.deb \
  && dpkg -i /tmp/packages-microsoft-prod.deb \
  && rm -f /tmp/packages-microsoft-prod.deb \
