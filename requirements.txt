@@ -13,3 +13,5 @@ apscheduler
 psycopg2-binary==2.9.9
 tabulate
 pypdf
+PyMuPDF
+pytesseract
