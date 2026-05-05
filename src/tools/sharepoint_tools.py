@@ -62,10 +62,27 @@ def _extract_pdf_pages(pdf_path: str):
         text = page.extract_text() or ""
         pages.append({
             "page_number": index,
-            "page_text": text.strip()
+            "page_text": _sanitize_pdf_text(text)
         })
 
     return pages
+
+
+def _sanitize_pdf_text(text: str) -> str:
+    """
+    Removes characters PostgreSQL cannot store in text columns while preserving
+    normal whitespace needed for invoice parsing.
+    """
+    if not text:
+        return ""
+
+    cleaned = text.replace("\x00", "")
+    cleaned = "".join(
+        char
+        for char in cleaned
+        if char in "\n\r\t" or ord(char) >= 32
+    )
+    return cleaned.strip()
 
 def _is_invoice_pdf_item(item, batch_filter: str = ""):
     if "file" not in item:
