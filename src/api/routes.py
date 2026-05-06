@@ -4,9 +4,10 @@ from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 from src.engine.job_manager import JobManager
 from src.services.sql_server_client import SQLServerClient
+from src.services.railway_db_client import RailwayDBClient
 from src.services.file_manager import FileManager
 from fastapi.responses import FileResponse
-from src.utils.security import validate_token, generate_token  #  UPDATED IMPORT
+from src.utils.security import validate_token, generate_token, validate_query  #  UPDATED IMPORT
 from src.utils.logger import setup_logger
 from src.tools.database_tools import load_sql_to_railway
 from src.services.sharepoint_client import SharePointClient
@@ -82,6 +83,35 @@ def process_sql_job(query):
         raise
 
 
+def process_postgresql_job(query):
+    """
+    Background job to execute PostgreSQL and generate CSV
+    """
+    try:
+        validate_query(query)
+        client = RailwayDBClient()
+
+        generator = client.execute_query_to_dataframe(query)
+
+        file_id = file_manager.generate_file_id()
+        file_path = file_manager.get_file_path(file_id)
+
+        file_manager.write_csv_stream(file_path, generator)
+
+        logger.info(f"[POSTGRES JOB] Completed successfully. file_id={file_id}")
+
+        token = generate_token(file_id)
+
+        return {
+            "file_id": file_id,
+            "download_url": f"/download/{file_id}?token={token}"
+        }
+
+    except Exception as e:
+        logger.error(f"[POSTGRES JOB] Failed: {str(e)}")
+        raise
+
+
 @router.post("/extract/sql")
 def extract_sql(req: SQLRequest, authorization: str | None = Header(default=None)):
     """
@@ -105,6 +135,33 @@ def extract_sql(req: SQLRequest, authorization: str | None = Header(default=None
         raise
     except Exception as e:
         logger.error(f"[API] extract_sql failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/extract/postgresql")
+def extract_postgresql(req: SQLRequest, authorization: str | None = Header(default=None)):
+    """
+    Starts async PostgreSQL extraction job
+    """
+    try:
+        require_api_token(authorization)
+        if not req.query or not req.query.strip():
+            raise HTTPException(status_code=400, detail="Query cannot be empty")
+
+        validate_query(req.query)
+        job_id = job_manager.create_job(process_postgresql_job, req.query)
+
+        logger.info(f"[API] PostgreSQL job created: {job_id}")
+
+        return {
+            "job_id": job_id,
+            "status": "started"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[API] extract_postgresql failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
