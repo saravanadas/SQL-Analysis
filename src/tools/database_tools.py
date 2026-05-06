@@ -1,12 +1,12 @@
 # STABILIZATION: 2026-05-04 — Added async staging tool + smaller chunks + time logging
 import time
-import uuid
 import os
 
 from fastmcp import FastMCP
 from src.services.sql_server_client import SQLServerClient
 from src.services.railway_db_client import RailwayDBClient
 from src.services.file_manager import FileManager
+from src.engine.job_manager import JobManager
 from src.utils.logger import setup_logger
 from src.utils.security import validate_query, generate_token
 from src.config.settings import settings
@@ -18,13 +18,12 @@ DATABASE_TOOL_NAMES = [
     "extract_sql_to_csv",
     "stage_sql_to_railway",
     "query_analytical_db",
-     "extract_analytical_to_csv",
+    "extract_analytical_to_csv",
     "stage_sql_to_railway_async",  # Added 2026-05-04
 ]
 
 # Background job manager for async staging — added 2026-05-04
-from src.engine.background_jobs import BackgroundJobManager
-job_manager = BackgroundJobManager()
+job_manager = JobManager()
 
 # =========================
 # FIX: Lazy initialization
@@ -154,14 +153,14 @@ def register_database_tools(mcp: FastMCP):
             if chunk is None or len(chunk) == 0:
                 continue
 
-            mode = 'w' if i == 0 else 'a'
-            header = i == 0
+            first_write = total_rows == 0
 
             chunk.to_csv(
                 filepath,
-                mode=mode,
-                header=header,
-                index=False
+                mode="w" if first_write else "a",
+                header=first_write,
+                index=False,
+                encoding="utf-8"
             )
 
             total_rows += len(chunk)
@@ -195,12 +194,7 @@ def register_database_tools(mcp: FastMCP):
         Returns immediately with a job ID. Use /job/{job_id} to check status.
         Added 2026-05-04 to prevent 502 timeouts on large transfers.
         """
-        job_id = str(uuid.uuid4())[:8]
-        
-        def _run_job():
-            return load_sql_to_railway(query, target_table)
-        
-        job_manager.submit_job(job_id, _run_job)
+        job_id = job_manager.create_job(load_sql_to_railway, query, target_table)
         return f"Job {job_id} queued. Check /job/{job_id} for status."
 
 
