@@ -163,7 +163,8 @@ def download(file_id: str, token: str):
         return FileResponse(
             path=file_path,
             filename=download_name,
-            media_type=media_type
+            media_type=media_type,
+            content_disposition_type="attachment"
         )
 
     except HTTPException:
