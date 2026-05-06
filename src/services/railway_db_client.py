@@ -308,3 +308,18 @@ class RailwayDBClient:
         """Dispose engine and close all pooled connections. Cleanup added 2026-05-04."""
         logger.info("Disposing Railway DB engine and closing all pooled connections — 2026-05-04")
         self.engine.dispose()
+
+    @retry(max_attempts=3, delay=2)
+    def execute_query_to_dataframe(self, query: str, chunksize: int = 50000):
+        """
+        Executes a SELECT query on the Railway database in chunks.
+        Returns an iterator of DataFrames for streaming exports.
+        """
+        logger.info(f"Executing analytical query export: {query[:100]}... | chunksize={chunksize}")
+        try:
+            with self.engine.connect() as conn:
+                for chunk in pd.read_sql(text(query), conn, chunksize=chunksize):
+                    yield chunk
+        except Exception as e:
+            logger.error(f"Analytical export query failed: {str(e)}")
+            raise
