@@ -84,3 +84,22 @@ class JobManager:
             "error": result.error,
             "created_at": str(result.created_date)
         }
+
+    def list_jobs(self):
+        with self.engine.connect() as conn:
+            results = conn.execute(text("""
+                SELECT job_id, status, result, error, created_date
+                FROM jobs
+                ORDER BY created_date DESC
+            """)).fetchall()
+
+        return [
+            {
+                "job_id": row.job_id,
+                "status": row.status,
+                "result": json.loads(row.result) if row.result else None,
+                "error": row.error,
+                "created_at": str(row.created_date)
+            }
+            for row in results
+        ]
