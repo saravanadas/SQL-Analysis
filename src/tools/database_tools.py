@@ -18,6 +18,7 @@ DATABASE_TOOL_NAMES = [
     "extract_sql_to_csv",
     "stage_sql_to_railway",
     "query_analytical_db",
+     "extract_analytical_to_csv",
     "stage_sql_to_railway_async",  # Added 2026-05-04
 ]
 
@@ -149,7 +150,7 @@ def register_database_tools(mcp: FastMCP):
         total_rows = 0
 
         # Write chunks to CSV
-        for i, chunk in enumerate(chunks):
+        for chunk in chunks:
             if chunk is None or len(chunk) == 0:
                 continue
 
@@ -236,3 +237,49 @@ def register_database_tools(mcp: FastMCP):
             return summary
         except Exception as e:
             return f"Error executing analytical query: {str(e)}"
+
+    @mcp.tool()
+    def extract_analytical_to_csv(query: str) -> str:
+        """
+        Executes a SELECT query on the Railway PostgreSQL analytical database
+        and exports the full result set to a CSV file.
+
+        Args:
+            query: The PostgreSQL SELECT query string to execute.
+
+        Returns:
+            A message with a secure download URL.
+        """
+        validate_query(query)
+
+        railway_client = get_railway_client()
+        file_manager = get_file_manager()
+
+        file_id = file_manager.generate_file_id()
+        filepath = file_manager.get_file_path(file_id)
+        chunks = railway_client.execute_query_to_dataframe(query)
+
+        total_rows = 0
+
+        for i, chunk in enumerate(chunks):
+            if chunk is None or len(chunk) == 0:
+                continue
+
+            first_write = total_rows == 0
+            chunk.to_csv(
+                filepath,
+                mode="w" if first_write else "a",
+                header=first_write,
+                index=False,
+                encoding="utf-8"
+            )
+
+            total_rows += len(chunk)
+
+        if total_rows == 0:
+            return "No data found for the given PostgreSQL query."
+
+        token = generate_token(file_id)
+        download_url = f"{settings.app_base_url}/download/{file_id}?token={token}"
+
+        return f"Successfully extracted {total_rows} PostgreSQL rows.\n\nDownload Link (expires in 60m):\n{download_url}"
