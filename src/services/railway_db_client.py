@@ -28,8 +28,7 @@ class RailwayDBClient:
             pool_recycle=1800,
             pool_timeout=10,          # Added 2026-05-04 — hard cap on acquiring connection from pool
             connect_args={
-                "connect_timeout": 10,  # Changed from 100 — 2026-05-04
-                "options": "-c statement_timeout=12000"  # Added 2026-05-04 — abort queries >12s before Railway 502
+                "connect_timeout": 10  # Changed from 100 — 2026-05-04
             }
         )
         logger.info("Initialized Railway DB staging engine.")
@@ -299,7 +298,10 @@ class RailwayDBClient:
             with self.engine.connect() as conn:
                 # Enforce 12-second query timeout at connection level — 2026-05-04
                 conn.execute(text("SET statement_timeout = '12s'"))
-                return pd.read_sql(text(query), conn)
+                try:
+                    return pd.read_sql(text(query), conn)
+                finally:
+                    conn.execute(text("SET statement_timeout = 0"))
         except Exception as e:
             logger.error(f"Analytical query failed: {str(e)}")
             raise
@@ -318,6 +320,7 @@ class RailwayDBClient:
         logger.info(f"Executing analytical query export: {query[:100]}... | chunksize={chunksize}")
         try:
             with self.engine.connect() as conn:
+                conn.execute(text("SET statement_timeout = 0"))
                 for chunk in pd.read_sql(text(query), conn, chunksize=chunksize):
                     yield chunk
         except Exception as e:
