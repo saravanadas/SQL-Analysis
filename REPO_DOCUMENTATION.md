@@ -10,7 +10,7 @@ The **UnifiedDataMCP** is a Model Context Protocol (MCP) server built with FastA
 - **SharePoint Online** (via Microsoft Graph API)
 - **Railway-hosted PostgreSQL** (analytical staging database)
 
-It exposes both **REST API endpoints** and **MCP tools** that allow AI agents to query SQL Server, extract data to CSV, stage data to PostgreSQL, and interact with SharePoint files.
+It exposes both **REST API endpoints** and **MCP tools** that allow AI agents to query SQL Server, export simple SQL Server results to CSV, stage complex/long-running SQL Server extracts asynchronously into PostgreSQL, export PostgreSQL analytical results to CSV, and interact with SharePoint files.
 
 ---
 
@@ -100,18 +100,23 @@ src/
 | Endpoint | Method | Purpose | Auth |
 |----------|--------|---------|------|
 | `/health` | GET | Health check | None |
-| `/load-to-railway` | POST | Trigger SQL Server → Railway pipeline | Bearer Token |
-| `/extract/sql` | POST | Start async SQL extraction job | Bearer Token |
+| `/load-to-railway` | POST | Trigger synchronous SQL Server to Railway staging for small jobs | Bearer Token |
+| `/load-to-railway/async` | POST | Queue long-running SQL Server to Railway staging and return `job_id` immediately | Bearer Token |
+| `/extract/sql` | POST | Start async SQL Server CSV extraction job | Bearer Token |
+| `/extract/postgresql` | POST | Start async PostgreSQL CSV extraction job | Bearer Token |
 | `/job/{job_id}` | GET | Get job status & result | None |
+| `/jobs` | GET | List persisted background jobs | None |
 | `/test-sharepoint` | GET | Test SharePoint token acquisition | Bearer Token |
-| `/download/{file_id}` | GET | Download generated CSV file | Token in query param |
+| `/download/{file_id}` | GET | Download generated file | Token in query param |
 
 **Key Classes:**
 - `LoadRequest`: Pydantic model with `query` and `table_name`
 - `SQLRequest`: Pydantic model with `query`
 
 **Key Functions:**
-- `process_sql_job()`: Background worker that executes SQL, writes CSV, returns download URL
+- `process_sql_job()`: Background worker that executes SQL Server, writes CSV, returns download URL
+- `process_postgresql_job()`: Background worker that executes PostgreSQL, writes CSV, returns download URL
+- `process_load_to_railway_job()`: Background worker for long-running SQL Server to PostgreSQL staging
 - `require_api_token()`: Validates `Authorization: Bearer <API_TOKEN>` header
 
 ---
@@ -141,6 +146,17 @@ Loads configuration from environment variables or `.env` file with Pydantic vali
 | `APP_BASE_URL` | str | "http://localhost:8000" | - |
 | `API_TOKEN` | str | **Required** | - |
 | `DOWNLOAD_TOKEN_SECRET` | str | **Required** | Min 10 chars |
+| `HTTP_REQUEST_TIMEOUT_SECONDS` | int | 60 | Non-negative |
+| `SQL_SERVER_CONNECT_TIMEOUT_SECONDS` | int | 10 | Non-negative |
+| `SQL_SERVER_LOGIN_TIMEOUT_SECONDS` | int | 10 | Non-negative |
+| `SQL_SERVER_POOL_TIMEOUT_SECONDS` | int | 30 | Non-negative |
+| `SQL_SERVER_PREVIEW_TIMEOUT_SECONDS` | int | 30 | Non-negative |
+| `SQL_SERVER_EXTRACT_TIMEOUT_SECONDS` | int | 300 | Non-negative |
+| `SQL_SERVER_FORCE_ABORT_SECONDS` | int | 0 | Non-negative; 0 disables hard abort |
+| `RAILWAY_CONNECT_TIMEOUT_SECONDS` | int | 10 | Non-negative |
+| `RAILWAY_QUERY_STATEMENT_TIMEOUT_MS` | int | 30000 | Non-negative |
+| `RAILWAY_EXPORT_STATEMENT_TIMEOUT_MS` | int | 0 | Non-negative; 0 disables statement timeout |
+| `RAILWAY_INSERT_CHUNKSIZE` | int | 500 | Non-negative |
 
 ---
 
@@ -163,8 +179,11 @@ Uses PostgreSQL `jobs` table for persistent job tracking and Python `threading` 
 | `create_job(func, *args)` | Creates job record, spawns thread, returns job_id |
 | `run_job(job_id, func, args)` | Executes function, updates DB with result/error |
 | `get_job(job_id)` | Retrieves job status/result from PostgreSQL |
+| `list_jobs()` | Lists persisted jobs ordered by creation time |
 
 **Job States:** `running`, `completed`, `failed`
+
+`JobManager` now bootstraps the `jobs` table automatically with `CREATE TABLE IF NOT EXISTS` and adds missing columns where possible, so async jobs can run on a fresh Railway PostgreSQL database without manual table setup.
 
 ---
 
@@ -194,10 +213,12 @@ Connects to on-premises SQL Server via pyodbc with connection pooling.
 
 | Method | Purpose |
 |--------|---------|
-| `execute_query_to_dataframe(query, chunksize)` | Streaming query execution (yields DataFrames) |
+| `execute_query_to_dataframe(query, chunksize, query_timeout_seconds, force_abort_seconds)` | Streaming query execution with operation-specific timeout profile |
 
 **Connection Features:**
-- `fast_executemany=True` for bulk operations
+- Configurable connect, login, pool, preview, and extract timeouts
+- Optional hard-abort timer disabled by default with `SQL_SERVER_FORCE_ABORT_SECONDS=0`
+- Closed or aborted connections are discarded instead of returned to the pool
 - `pool_pre_ping=True` for health checks
 - `pool_recycle=1800` to prevent stale connections
 - `@retry` decorator (3 attempts, 3s delay)
@@ -222,7 +243,8 @@ Manages the analytical staging database on Railway.
 | `ensure_invoice_file_table(table_name)` | Creates table for PDF metadata |
 | `upsert_invoice_file_record(record, table_name)` | Insert/update PDF metadata |
 | `store_pdf_text_rows(rows, table_name)` | Stores extracted PDF text pages |
-| `execute_query(query)` | Executes SELECT and returns DataFrame |
+| `execute_query(query, statement_timeout_ms)` | Executes bounded PostgreSQL SELECT and returns DataFrame |
+| `execute_query_to_dataframe(query, chunksize, statement_timeout_ms)` | Streams PostgreSQL SELECT results for CSV export |
 
 ---
 
@@ -249,13 +271,17 @@ Integrates with SharePoint via Microsoft Graph API using client credentials flow
 
 | Tool Name | Purpose | Parameters |
 |-----------|---------|------------|
-| `query_sql_server` | Execute SELECT on SQL Server | `query: str` |
-| `extract_sql_to_csv` | Extract to CSV with download link | `query: str` |
-| `stage_sql_to_railway` | Transfer SQL Server → Railway | `query: str`, `target_table: str` |
-| `query_analytical_db` | Query Railway PostgreSQL | `query: str` |
+| `query_sql_server` | Execute bounded preview SELECT on SQL Server | `query: str` |
+| `extract_sql_to_csv` | Export small/medium SQL Server SELECT results to CSV with download link | `query: str` |
+| `stage_sql_to_railway` | Synchronous SQL Server to Railway staging for small jobs | `query: str`, `target_table: str` |
+| `stage_sql_to_railway_async` | Queue long-running SQL Server to Railway staging job | `query: str`, `target_table: str` |
+| `query_analytical_db` | Query Railway PostgreSQL for previews/summaries | `query: str` |
+| `extract_analytical_to_csv` | Export PostgreSQL analytical/staged query results to CSV | `query: str` |
 
 **Shared Function:**
-- `load_sql_to_railway(query, table_name)`: Core pipeline logic used by both MCP tool and REST API
+- `load_sql_to_railway(query, table_name, query_timeout_seconds, chunksize)`: Core pipeline logic used by MCP tools and REST API
+
+**Export Routing Rule:** Use `extract_sql_to_csv` for simple SQL Server exports. For complex joins, grouped aggregations, balance-forward extracts, reconciliation datasets, or any SQL Server export that may exceed the extract timeout, use `stage_sql_to_railway_async` first, then export the staged PostgreSQL table with `extract_analytical_to_csv`.
 
 ---
 
@@ -359,6 +385,19 @@ DOWNLOAD_TOKEN_SECRET=your-secret-for-download-tokens-min-10-chars
 LOG_LEVEL=INFO
 OUTPUT_DIR=/app/output_files
 APP_BASE_URL=https://your-app.railway.app
+
+# Timeout and sizing policy
+HTTP_REQUEST_TIMEOUT_SECONDS=60
+SQL_SERVER_CONNECT_TIMEOUT_SECONDS=10
+SQL_SERVER_LOGIN_TIMEOUT_SECONDS=10
+SQL_SERVER_POOL_TIMEOUT_SECONDS=30
+SQL_SERVER_PREVIEW_TIMEOUT_SECONDS=30
+SQL_SERVER_EXTRACT_TIMEOUT_SECONDS=300
+SQL_SERVER_FORCE_ABORT_SECONDS=0
+RAILWAY_CONNECT_TIMEOUT_SECONDS=10
+RAILWAY_QUERY_STATEMENT_TIMEOUT_MS=30000
+RAILWAY_EXPORT_STATEMENT_TIMEOUT_MS=0
+RAILWAY_INSERT_CHUNKSIZE=500
 ```
 
 ---
@@ -528,6 +567,39 @@ curl -X POST http://localhost:8000/load-to-railway \
 **Expected:** `{"status": "success", "rows_loaded": 100, ...}`
 
 ---
+### 6.15 Test 14: Async SQL to Railway Pipeline
+
+```bash
+curl -X POST http://localhost:8000/load-to-railway/async \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -d '{
+    "query": "SELECT TOP 100 * FROM YourTable",
+    "table_name": "test_staging_async"
+  }'
+```
+
+**Expected:** `{"job_id": "uuid", "status": "started", "status_url": "/job/{job_id}"}`. Poll `/job/{job_id}` until `completed` or `failed`.
+
+---
+
+### 6.16 Test 15: PostgreSQL CSV Export
+
+Use MCP tool `extract_analytical_to_csv` after staging has completed:
+
+```json
+{
+  "tool": "extract_analytical_to_csv",
+  "arguments": {
+    "query": "SELECT * FROM test_staging_async"
+  }
+}
+```
+
+**Expected:** Message with row count and `/download/{file_id}?token=...` URL.
+
+---
+
 
 ### 6.15 Test 14: SharePoint → Railway Pipeline
 
@@ -574,7 +646,9 @@ docker build -t unified-mcp .
 | `pyodbc` import error | Missing ODBC driver | Install `msodbcsql18` in Dockerfile |
 | SQL connection timeout | Firewall/network | Check `debug_tcp` endpoint |
 | SharePoint 401 | Token expired | Check client secret & permissions |
-| Railway 502 | Request timeout | Increase timeout or reduce `max_items` |
+| Railway 502 | Synchronous request exceeded timeout | Use `/load-to-railway/async` or `stage_sql_to_railway_async`; tune `HTTP_REQUEST_TIMEOUT_SECONDS` only for moderate sync work |
+| SQL Server CSV export times out around 300s | Query is too complex for direct SQL Server CSV export | Stage with `stage_sql_to_railway_async`, then export staged PostgreSQL data with `extract_analytical_to_csv` |
+| PostgreSQL preview query times out | `RAILWAY_QUERY_STATEMENT_TIMEOUT_MS` is protecting preview calls | Narrow the preview query or use PostgreSQL CSV export for full data |
 | CSV download 403 | Token expired | Regenerate within 60 minutes |
 | Job stays "running" | Thread crashed | Check logs, restart container |
 
@@ -649,4 +723,4 @@ For complete step-by-step instructions, exact `curl` commands, decision gates, a
 
 ---
 
-*Document generated for SQL-Analysis repository. Last updated: May 2026.*
+*Document updated for SQL-Analysis repository. Last updated: May 2026.*
