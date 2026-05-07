@@ -1,26 +1,88 @@
-unified-mcp/
-├── .env                        # Local environment variables
-├── .gitignore                  # Git exclusions
-├── Dockerfile                  # Container definition
-├── railway.toml                # Railway deployment configuration
-├── requirements.txt            # Python dependencies
-├── README.md                   # Documentation
-├── src/                        # Source code root
-│   ├── __init__.py
-│   ├── main.py                 # FastMCP entry point
+SQL-Analysis/
+├── .env.example                    # Environment variables template with inline documentation
+├── .gitignore                      # Git exclusions (.env, __pycache__, output_files/, .venv/)
+├── Dockerfile                      # Python 3.11-slim + ODBC Driver 18 + Tesseract OCR container image
+├── Procfile                        # Heroku/Railway process definition (uvicorn)
+├── Project Structure.txt           # This file — repository layout reference
+├── railway.toml                    # Railway deployment config (Dockerfile builder, restart policy)
+├── README.md                       # GitHub landing page — quick start, architecture, usage
+├── REPO_DOCUMENTATION.md           # Comprehensive technical reference (architecture, APIs, tools)
+├── requirements.txt                # Python dependencies (17 packages)
+├── TEST_PLAN.md                    # Three-phase test plan (local, CI, Railway production)
+│
+├── src/                            # Application source code
+│   ├── __init__.py                 # Package marker
+│   ├── main.py                     # FastAPI app, FastMCP init, TimeoutMiddleware, debug endpoints,
+│   │                               #   lifespan (scheduler + graceful pool cleanup), uvicorn entry
+│   │
+│   ├── api/
+│   │   ├── __init__.py             # Package marker
+│   │   └── routes.py               # REST API router — /load-to-railway, /extract/sql,
+│   │                               #   /extract/postgresql, /load-to-railway/async, /job/{id},
+│   │                               #   /jobs, /test-sharepoint, /download/{file_id}
+│   │
 │   ├── config/
-│   │   ├── __init__.py
-│   │   ├── settings.py         # Pydantic BaseSettings
-│   ├── utils/
-│   │   ├── __init__.py
-│   │   ├── logger.py           # Structured logging
+│   │   ├── __init__.py             # Package marker
+│   │   ├── settings.py             # Pydantic BaseSettings — all env vars with validation
+│   │   └── database.py             # SQLAlchemy engine factory for Railway PostgreSQL (get_engine)
+│   │
+│   ├── engine/                     # Background job execution (note: no __init__.py)
+│   │   ├── background_jobs.py      # BackgroundJobManager — in-memory thread-safe job tracker
+│   │   │                           #   (retained for reference; routes use job_manager.py)
+│   │   └── job_manager.py          # JobManager — PostgreSQL-backed persistent job tracking
+│   │                               #   with CREATE TABLE IF NOT EXISTS auto-migration
+│   │
 │   ├── services/
-│   │   ├── __init__.py
-│   │   ├── sql_server_client.py   # On-prem SQL extraction
-│   │   ├── railway_db_client.py   # Railway DB staging
-│   │   ├── sharepoint_client.py   # Microsoft Graph API
-│   │   ├── file_manager.py        # CSV/File IO operations
+│   │   ├── __init__.py             # Package marker
+│   │   ├── file_manager.py         # FileManager — CSV generation, streaming write, temp file
+│   │   │                           #   cleanup, UUID-based file IDs, base64 encoding
+│   │   ├── railway_db_client.py    # RailwayDBClient — PostgreSQL staging, chunked inserts,
+│   │   │                           #   PDF text storage, invoice tracking, statement timeouts
+│   │   ├── sharepoint_client.py    # SharePointClient — Microsoft Graph API OAuth2 client
+│   │   │                           #   credentials, file listing (with pagination), recursive
+│   │   │                           #   walk, file download, metadata retrieval
+│   │   └── sql_server_client.py    # SQLServerClient + ConnectionPool — on-prem SQL Server
+│   │                               #   via pyodbc, chunked DataFrame streaming, configurable
+│   │                               #   timeouts, optional hard-abort timer, pool management
+│   │
 │   ├── tools/
-│   │   ├── __init__.py
-│   │   ├── database_tools.py      # MCP Tool definitions for DB
-│   │   ├── sharepoint_tools.py    # MCP Tool definitions for SP
+│   │   ├── __init__.py             # Package marker
+│   │   ├── database_tools.py       # 6 MCP tools: query_sql_server, extract_sql_to_csv,
+│   │   │                           #   stage_sql_to_railway, stage_sql_to_railway_async,
+│   │   │                           #   query_analytical_db, extract_analytical_to_csv
+│   │   │                           #   + shared load_sql_to_railway() pipeline function
+│   │   └── sharepoint_tools.py     # 10 MCP tools: ingest_sharepoint_invoice_pdfs_to_railway,
+│   │                               #   ingest_invoice_pdfs, search_sharepoint_pdfs_recursive,
+│   │                               #   extract_sharepoint_pdf_text, stage_sharepoint_pdf_text_to_railway,
+│   │                               #   stage_invoice_lines_to_railway, list_sharepoint_files,
+│   │                               #   download_sharepoint_file, download_sharepoint_folder,
+│   │                               #   sharepoint_to_railway
+│   │
+│   └── utils/
+│       ├── __init__.py             # Package marker
+│       ├── data_validator.py       # validate_dataframe() — drop empty rows, trim columns, dedup
+│       ├── logger.py               # setup_logger() — STDOUT logging for Railway log aggregation
+│       ├── retry.py                # retry() fixed-delay + retry_with_backoff() jittered exponential
+│       ├── scheduler.py            # APScheduler daily SharePoint ingestion job (dormant module)
+│       └── security.py             # generate_token() / validate_token() HMAC-SHA256 download tokens
+│                                   #   + validate_query() SQL injection prevention (SELECT-only)
+│
+├── tests/
+│   ├── __init__.py                 # Package marker
+│   └── cli_tests.py               # 13-step smoke test suite — health, debug endpoints, SQL
+│                                   #   extraction, job polling, file download, SharePoint auth,
+│                                   #   sync/async Railway staging, Railway DB connectivity
+│                                   #   Supports CLI args: --base-url, --api-token, --stop-on-failure
+│
+└── .github/
+    └── workflows/
+        └── ci.yml                  # GitHub Actions CI — Docker build + Railway production
+                                    #   smoke tests (health, tools, SharePoint, DB connectivity)
+
+# ─────────────────────────────────────────────────────────────
+# Local-Only Directories (not tracked in Git)
+# ─────────────────────────────────────────────────────────────
+# .env                              # Real credentials (copy from .env.example)
+# .venv/                            # Python virtual environment
+# output_files/                     # Temporary CSV/file downloads (cleaned hourly)
+# validation/                       # Test run logs and validation reports
