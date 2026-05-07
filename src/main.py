@@ -80,7 +80,7 @@ app.include_router(router)
 
 # Timeout middleware added 2026-05-04 — prevents Railway 502 by returning 504 early
 class TimeoutMiddleware:
-    def __init__(self, app, timeout_seconds=12):
+    def __init__(self, app, timeout_seconds=60):
         self.app = app
         self.timeout_seconds = timeout_seconds
 
@@ -105,7 +105,7 @@ class TimeoutMiddleware:
                 "body": b'{"detail":"Request timed out. Try a smaller query or use the async staging endpoint."}',
             })
 
-app.add_middleware(TimeoutMiddleware, timeout_seconds=12)
+app.add_middleware(TimeoutMiddleware, timeout_seconds=settings.http_request_timeout_seconds)
 
 # Mount MCP safely
 try:
