@@ -11,6 +11,22 @@ class JobManager:
 
     def __init__(self):
         self.engine = get_engine()
+        self._ensure_schema()
+
+    def _ensure_schema(self):
+        with self.engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS jobs (
+                    job_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    result TEXT,
+                    error TEXT,
+                    created_date TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS result TEXT"))
+            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS error TEXT"))
+            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS created_date TIMESTAMPTZ DEFAULT NOW()"))
 
     def create_job(self, func, *args):
         job_id = str(uuid.uuid4())
