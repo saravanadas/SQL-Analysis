@@ -11,6 +11,7 @@ from src.utils.security import validate_token, generate_token, validate_query  #
 from src.utils.logger import setup_logger
 from src.tools.database_tools import load_sql_to_railway
 from src.services.sharepoint_client import SharePointClient
+from src.config.settings import settings
 
 
 router = APIRouter()
@@ -39,7 +40,11 @@ def load_to_railway_api(request: LoadRequest, authorization: str | None = Header
     """
     try:
         require_api_token(authorization)
-        result = load_sql_to_railway(request.query, request.table_name)
+        result = load_sql_to_railway(
+            request.query,
+            request.table_name,
+            query_timeout_seconds=settings.sql_server_extract_timeout_seconds,
+        )
         return result
     except HTTPException:
         raise
@@ -50,6 +55,17 @@ class SQLRequest(BaseModel):
     query: str
 
 
+def process_load_to_railway_job(query, table_name):
+    """
+    Background job to stage SQL Server data into PostgreSQL.
+    """
+    return load_sql_to_railway(
+        query,
+        table_name,
+        query_timeout_seconds=settings.sql_server_extract_timeout_seconds,
+    )
+
+
 def process_sql_job(query):
     """
     Background job to execute SQL and generate CSV
@@ -57,7 +73,10 @@ def process_sql_job(query):
     try:
         client = SQLServerClient()
 
-        generator = client.execute_query_to_dataframe(query)
+        generator = client.execute_query_to_dataframe(
+            query,
+            query_timeout_seconds=settings.sql_server_extract_timeout_seconds,
+        )
 
         file_id = file_manager.generate_file_id()
         file_path = file_manager.get_file_path(file_id)
@@ -135,6 +154,41 @@ def extract_sql(req: SQLRequest, authorization: str | None = Header(default=None
         raise
     except Exception as e:
         logger.error(f"[API] extract_sql failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/load-to-railway/async")
+def load_to_railway_async_api(request: LoadRequest, authorization: str | None = Header(default=None)):
+    """
+    Queues a SQL Server to Railway DB staging job and returns immediately.
+    """
+    try:
+        require_api_token(authorization)
+        if not request.query or not request.query.strip():
+            raise HTTPException(status_code=400, detail="Query cannot be empty")
+        if not request.table_name or not request.table_name.strip():
+            raise HTTPException(status_code=400, detail="table_name cannot be empty")
+
+        validate_query(request.query)
+        job_id = job_manager.create_job(
+            process_load_to_railway_job,
+            request.query,
+            request.table_name,
+        )
+
+        logger.info(f"[API] SQL to Railway staging job created: {job_id}")
+
+        return {
+            "job_id": job_id,
+            "status": "started",
+            "target_table": request.table_name,
+            "status_url": f"/job/{job_id}",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[API] load_to_railway_async failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
