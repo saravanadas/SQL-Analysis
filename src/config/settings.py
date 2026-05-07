@@ -41,6 +41,21 @@ class Settings(BaseSettings):
     app_base_url: str = Field("http://localhost:8000", env="APP_BASE_URL")
 
     # =========================
+    # Timeout / sizing policy
+    # =========================
+    http_request_timeout_seconds: int = Field(60, env="HTTP_REQUEST_TIMEOUT_SECONDS")
+    sql_server_connect_timeout_seconds: int = Field(10, env="SQL_SERVER_CONNECT_TIMEOUT_SECONDS")
+    sql_server_login_timeout_seconds: int = Field(10, env="SQL_SERVER_LOGIN_TIMEOUT_SECONDS")
+    sql_server_pool_timeout_seconds: int = Field(30, env="SQL_SERVER_POOL_TIMEOUT_SECONDS")
+    sql_server_preview_timeout_seconds: int = Field(30, env="SQL_SERVER_PREVIEW_TIMEOUT_SECONDS")
+    sql_server_extract_timeout_seconds: int = Field(300, env="SQL_SERVER_EXTRACT_TIMEOUT_SECONDS")
+    sql_server_force_abort_seconds: int = Field(0, env="SQL_SERVER_FORCE_ABORT_SECONDS")
+    railway_connect_timeout_seconds: int = Field(10, env="RAILWAY_CONNECT_TIMEOUT_SECONDS")
+    railway_query_statement_timeout_ms: int = Field(30000, env="RAILWAY_QUERY_STATEMENT_TIMEOUT_MS")
+    railway_export_statement_timeout_ms: int = Field(0, env="RAILWAY_EXPORT_STATEMENT_TIMEOUT_MS")
+    railway_insert_chunksize: int = Field(500, env="RAILWAY_INSERT_CHUNKSIZE")
+
+    # =========================
     # Security (NEW)
     # =========================
     download_token_secret: str = Field(..., env="DOWNLOAD_TOKEN_SECRET")
@@ -82,6 +97,25 @@ class Settings(BaseSettings):
     def validate_secret(cls, v):
         if len(v) < 10:
             raise ValueError("DOWNLOAD_TOKEN_SECRET must be at least 10 characters long")
+        return v
+
+    @field_validator(
+        "http_request_timeout_seconds",
+        "sql_server_connect_timeout_seconds",
+        "sql_server_login_timeout_seconds",
+        "sql_server_pool_timeout_seconds",
+        "sql_server_preview_timeout_seconds",
+        "sql_server_extract_timeout_seconds",
+        "sql_server_force_abort_seconds",
+        "railway_connect_timeout_seconds",
+        "railway_query_statement_timeout_ms",
+        "railway_export_statement_timeout_ms",
+        "railway_insert_chunksize",
+    )
+    @classmethod
+    def validate_non_negative_ints(cls, v):
+        if v < 0:
+            raise ValueError("Timeout and chunk settings cannot be negative")
         return v
 
     model_config = SettingsConfigDict(
