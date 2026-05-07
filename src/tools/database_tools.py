@@ -1,6 +1,5 @@
 # STABILIZATION: 2026-05-04 — Added async staging tool + smaller chunks + time logging
 import time
-import os
 
 from fastmcp import FastMCP
 from src.services.sql_server_client import SQLServerClient
@@ -39,7 +38,12 @@ def get_file_manager():
     return FileManager()
 
 
-def load_sql_to_railway(query: str, table_name: str) -> dict:
+def load_sql_to_railway(
+    query: str,
+    table_name: str,
+    query_timeout_seconds: int | None = None,
+    chunksize: int = 50000,
+) -> dict:
     """
     Core logic for SQL Server → Railway pipeline.
     Used by both the FastAPI endpoint and the MCP tool.
@@ -54,7 +58,14 @@ def load_sql_to_railway(query: str, table_name: str) -> dict:
         railway_client = get_railway_client()
 
         # Execute query in streaming mode
-        chunks = sql_client.execute_query_to_dataframe(query)
+        if query_timeout_seconds is None:
+            query_timeout_seconds = settings.sql_server_extract_timeout_seconds
+
+        chunks = sql_client.execute_query_to_dataframe(
+            query,
+            chunksize=chunksize,
+            query_timeout_seconds=query_timeout_seconds,
+        )
 
         total_rows = 0
 
@@ -76,6 +87,7 @@ def load_sql_to_railway(query: str, table_name: str) -> dict:
             "status": "success",
             "table": table_name,
             "rows_loaded": total_rows,
+            "query_timeout_seconds": query_timeout_seconds,
             "message": f"Successfully transferred {total_rows} rows to '{table_name}'"
         }
     except Exception as e:
@@ -99,7 +111,11 @@ def register_database_tools(mcp: FastMCP):
 
         try:
             # Reduced chunk to stay under Railway timeout — 2026-05-04
-            chunks = sql_client.execute_query_to_dataframe(query, chunksize=500)
+            chunks = sql_client.execute_query_to_dataframe(
+                query,
+                chunksize=500,
+                query_timeout_seconds=settings.sql_server_preview_timeout_seconds,
+            )
             first_chunk = next(chunks, None)
 
             if first_chunk is None or first_chunk.empty:
@@ -140,7 +156,10 @@ def register_database_tools(mcp: FastMCP):
         file_manager = get_file_manager()
 
         # Execute query in streaming mode
-        chunks = sql_client.execute_query_to_dataframe(query)
+        chunks = sql_client.execute_query_to_dataframe(
+            query,
+            query_timeout_seconds=settings.sql_server_extract_timeout_seconds,
+        )
 
         # Generate file path
         file_id = file_manager.generate_file_id()
@@ -184,7 +203,11 @@ def register_database_tools(mcp: FastMCP):
         Extracts data from the on-premises SQL Server and stages it directly 
         into the Railway analytical database.
         """
-        result = load_sql_to_railway(query, target_table)
+        result = load_sql_to_railway(
+            query,
+            target_table,
+            query_timeout_seconds=settings.sql_server_extract_timeout_seconds,
+        )
         return result["message"]
 
     @mcp.tool()
@@ -194,8 +217,18 @@ def register_database_tools(mcp: FastMCP):
         Returns immediately with a job ID. Use /job/{job_id} to check status.
         Added 2026-05-04 to prevent 502 timeouts on large transfers.
         """
-        job_id = job_manager.create_job(load_sql_to_railway, query, target_table)
-        return f"Job {job_id} queued. Check /job/{job_id} for status."
+        job_id = job_manager.create_job(
+            load_sql_to_railway,
+            query,
+            target_table,
+            settings.sql_server_extract_timeout_seconds,
+        )
+        return (
+            "SQL Server to PostgreSQL staging job queued.\n"
+            f"Job ID: {job_id}\n"
+            f"Status URL: /job/{job_id}\n"
+            f"Target table: {target_table}"
+        )
 
 
     @mcp.tool()
@@ -211,7 +244,10 @@ def register_database_tools(mcp: FastMCP):
         railway_client = get_railway_client()
         
         try:
-            df = railway_client.execute_query(query)
+            df = railway_client.execute_query(
+                query,
+                statement_timeout_ms=settings.railway_query_statement_timeout_ms,
+            )
             
             if df.empty:
                 elapsed = time.time() - start
@@ -251,7 +287,10 @@ def register_database_tools(mcp: FastMCP):
 
         file_id = file_manager.generate_file_id()
         filepath = file_manager.get_file_path(file_id)
-        chunks = railway_client.execute_query_to_dataframe(query)
+        chunks = railway_client.execute_query_to_dataframe(
+            query,
+            statement_timeout_ms=settings.railway_export_statement_timeout_ms,
+        )
 
         total_rows = 0
 
