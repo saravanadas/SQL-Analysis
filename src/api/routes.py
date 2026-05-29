@@ -31,6 +31,7 @@ def health():
 class LoadRequest(BaseModel):
     query: str
     table_name: str
+    session_id: str | None = None
 
 
 @router.post("/load-to-railway")
@@ -43,6 +44,7 @@ def load_to_railway_api(request: LoadRequest, authorization: str | None = Header
         result = load_sql_to_railway(
             request.query,
             request.table_name,
+            session_id=request.session_id,
             query_timeout_seconds=settings.sql_server_extract_timeout_seconds,
         )
         return result
@@ -55,13 +57,14 @@ class SQLRequest(BaseModel):
     query: str
 
 
-def process_load_to_railway_job(query, table_name):
+def process_load_to_railway_job(query, table_name, session_id=None):
     """
     Background job to stage SQL Server data into PostgreSQL.
     """
     return load_sql_to_railway(
         query,
         table_name,
+        session_id=session_id,
         query_timeout_seconds=settings.sql_server_extract_timeout_seconds,
     )
 
@@ -174,6 +177,8 @@ def load_to_railway_async_api(request: LoadRequest, authorization: str | None = 
             process_load_to_railway_job,
             request.query,
             request.table_name,
+            request.session_id,
+            session_id=request.session_id,
         )
 
         logger.info(f"[API] SQL to Railway staging job created: {job_id}")
@@ -182,6 +187,7 @@ def load_to_railway_async_api(request: LoadRequest, authorization: str | None = 
             "job_id": job_id,
             "status": "started",
             "target_table": request.table_name,
+            "session_id": request.session_id,
             "status_url": f"/job/{job_id}",
         }
 

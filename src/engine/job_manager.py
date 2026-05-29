@@ -27,17 +27,19 @@ class JobManager:
             conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS result TEXT"))
             conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS error TEXT"))
             conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS created_date TIMESTAMPTZ DEFAULT NOW()"))
+            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS session_id TEXT"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_jobs_session_id ON jobs(session_id)"))
 
-    def create_job(self, func, *args):
+    def create_job(self, func, *args, session_id: str | None = None):
         job_id = str(uuid.uuid4())
 
-        logger.info(f"[JOB {job_id}] Creating job")
+        logger.info(f"[JOB {job_id}] Creating job (session_id={session_id or 'shared'})")
 
         with self.engine.begin() as conn:
             conn.execute(text("""
-                INSERT INTO jobs (job_id, status)
-                VALUES (:job_id, 'running')
-            """), {"job_id": job_id})
+                INSERT INTO jobs (job_id, status, session_id)
+                VALUES (:job_id, 'running', :session_id)
+            """), {"job_id": job_id, "session_id": session_id})
 
         threading.Thread(
             target=self.run_job,
@@ -83,7 +85,7 @@ class JobManager:
     def get_job(self, job_id):
         with self.engine.connect() as conn:
             result = conn.execute(text("""
-                SELECT job_id, status, result, error, created_date
+                SELECT job_id, status, result, error, created_date, session_id
                 FROM jobs
                 WHERE job_id = :job_id
             """), {"job_id": job_id}).fetchone()
@@ -96,6 +98,7 @@ class JobManager:
         return {
             "job_id": result.job_id,
             "status": result.status,
+            "session_id": result.session_id,
             "result": json.loads(result.result) if result.result else None,
             "error": result.error,
             "created_at": str(result.created_date)
@@ -104,7 +107,7 @@ class JobManager:
     def list_jobs(self):
         with self.engine.connect() as conn:
             results = conn.execute(text("""
-                SELECT job_id, status, result, error, created_date
+                SELECT job_id, status, result, error, created_date, session_id
                 FROM jobs
                 ORDER BY created_date DESC
             """)).fetchall()
@@ -113,6 +116,7 @@ class JobManager:
             {
                 "job_id": row.job_id,
                 "status": row.status,
+                "session_id": row.session_id,
                 "result": json.loads(row.result) if row.result else None,
                 "error": row.error,
                 "created_at": str(row.created_date)

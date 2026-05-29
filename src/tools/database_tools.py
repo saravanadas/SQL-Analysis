@@ -8,11 +8,13 @@ from src.services.file_manager import FileManager
 from src.engine.job_manager import JobManager
 from src.utils.logger import setup_logger
 from src.utils.security import validate_query, generate_token
+from src.utils.session import create_session_id, resolve_session_table_name, table_write_lock
 from src.config.settings import settings
 
 logger = setup_logger(__name__)
 
 DATABASE_TOOL_NAMES = [
+    "create_analysis_session",
     "query_sql_server",
     "extract_sql_to_csv",
     "stage_sql_to_railway",
@@ -41,6 +43,7 @@ def get_file_manager():
 def load_sql_to_railway(
     query: str,
     table_name: str,
+    session_id: str | None = None,
     query_timeout_seconds: int | None = None,
     chunksize: int = 50000,
 ) -> dict:
@@ -50,6 +53,14 @@ def load_sql_to_railway(
     """
     logger.info(f"Starting SQL → Railway pipeline for table '{table_name}'")
     
+    physical_table = resolve_session_table_name(table_name, session_id)
+    logger.info(
+        "Session routing: requested table '%s' -> physical table '%s' (session_id=%s)",
+        table_name,
+        physical_table,
+        session_id or "shared",
+    )
+
     # Validate query early
     validate_query(query)
 
@@ -57,38 +68,41 @@ def load_sql_to_railway(
         sql_client = get_sql_client()
         railway_client = get_railway_client()
 
-        # Execute query in streaming mode
-        if query_timeout_seconds is None:
-            query_timeout_seconds = settings.sql_server_extract_timeout_seconds
+        with table_write_lock(physical_table):
+            # Execute query in streaming mode
+            if query_timeout_seconds is None:
+                query_timeout_seconds = settings.sql_server_extract_timeout_seconds
 
-        chunks = sql_client.execute_query_to_dataframe(
-            query,
-            chunksize=chunksize,
-            query_timeout_seconds=query_timeout_seconds,
-        )
-
-        total_rows = 0
-
-        for chunk in chunks:
-            if chunk is None or len(chunk) == 0:
-                continue
-
-            mode = "replace" if total_rows == 0 else "append"
-            rows_inserted = railway_client.insert_dataframe_chunked(
-                chunk,
-                table_name,
-                mode=mode
+            chunks = sql_client.execute_query_to_dataframe(
+                query,
+                chunksize=chunksize,
+                query_timeout_seconds=query_timeout_seconds,
             )
 
-            total_rows += rows_inserted
-            logger.info(f"Total rows processed so far: {total_rows}")
+            total_rows = 0
+
+            for chunk in chunks:
+                if chunk is None or len(chunk) == 0:
+                    continue
+
+                mode = "replace" if total_rows == 0 else "append"
+                rows_inserted = railway_client.insert_dataframe_chunked(
+                    chunk,
+                    physical_table,
+                    mode=mode
+                )
+
+                total_rows += rows_inserted
+                logger.info(f"Total rows processed so far: {total_rows}")
              
         return {
             "status": "success",
-            "table": table_name,
+            "requested_table": table_name,
+            "table": physical_table,
+            "session_id": session_id,
             "rows_loaded": total_rows,
             "query_timeout_seconds": query_timeout_seconds,
-            "message": f"Successfully transferred {total_rows} rows to '{table_name}'"
+            "message": f"Successfully transferred {total_rows} rows to '{physical_table}'"
         }
     except Exception as e:
         logger.error(f"SQL → Railway pipeline failed: {str(e)}")
@@ -97,6 +111,22 @@ def load_sql_to_railway(
 
 def register_database_tools(mcp: FastMCP):
     """Registers database-related tools to the FastMCP instance."""
+
+    @mcp.tool()
+    def create_analysis_session(label: str = "") -> str:
+        """
+        Creates a session id for an independent analysis run. Pass this
+        session_id to staging tools so PostgreSQL tables do not overlap with
+        other users or other agent runs.
+        """
+        session_id = create_session_id()
+        label_text = f" for {label}" if label else ""
+        return (
+            f"Created analysis session{label_text}.\n"
+            f"session_id: {session_id}\n\n"
+            "Use this session_id in stage_sql_to_railway, "
+            "stage_sql_to_railway_async, and SharePoint staging tools."
+        )
 
     @mcp.tool()
     def query_sql_server(query: str) -> str:
@@ -198,7 +228,7 @@ def register_database_tools(mcp: FastMCP):
 
 
     @mcp.tool()
-    def stage_sql_to_railway(query: str, target_table: str) -> str:
+    def stage_sql_to_railway(query: str, target_table: str, session_id: str = "") -> str:
         """
         Extracts data from the on-premises SQL Server and stages it directly 
         into the Railway analytical database.
@@ -206,12 +236,13 @@ def register_database_tools(mcp: FastMCP):
         result = load_sql_to_railway(
             query,
             target_table,
+            session_id=session_id or None,
             query_timeout_seconds=settings.sql_server_extract_timeout_seconds,
         )
         return result["message"]
 
     @mcp.tool()
-    def stage_sql_to_railway_async(query: str, target_table: str) -> str:
+    def stage_sql_to_railway_async(query: str, target_table: str, session_id: str = "") -> str:
         """
         Queues a SQL Server -> Railway staging job asynchronously.
         Returns immediately with a job ID. Use /job/{job_id} to check status.
@@ -221,13 +252,18 @@ def register_database_tools(mcp: FastMCP):
             load_sql_to_railway,
             query,
             target_table,
+            session_id or None,
             settings.sql_server_extract_timeout_seconds,
+            session_id=session_id or None,
         )
+        physical_table = resolve_session_table_name(target_table, session_id or None)
         return (
             "SQL Server to PostgreSQL staging job queued.\n"
             f"Job ID: {job_id}\n"
             f"Status URL: /job/{job_id}\n"
-            f"Target table: {target_table}"
+            f"Requested table: {target_table}\n"
+            f"Physical table: {physical_table}\n"
+            f"Session ID: {session_id or 'shared'}"
         )
 
 

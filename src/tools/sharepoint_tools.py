@@ -3,6 +3,7 @@ from src.services.sharepoint_client import SharePointClient
 from src.services.file_manager import FileManager
 from src.utils.logger import setup_logger
 from src.utils.security import generate_token
+from src.utils.session import resolve_session_table_name, table_write_lock
 from src.config.settings import settings
 import os
 import pandas as pd
@@ -164,11 +165,15 @@ def _ingest_invoice_pdf_text(
     max_files: int,
     force_reprocess: bool,
     pdf_text_table: str,
-    file_table: str
+    file_table: str,
+    session_id: str | None = None,
 ):
     sp_client = get_sp_client()
     file_manager = get_file_manager()
     railway_client = get_railway_client()
+
+    pdf_text_table = resolve_session_table_name(pdf_text_table, session_id)
+    file_table = resolve_session_table_name(file_table, session_id)
 
     items = sp_client.list_files_recursive(folder_path, max_items=max_files * 10)
     batch_filter = batch_number.strip().lower()
@@ -259,7 +264,8 @@ def register_sharepoint_tools(mcp: FastMCP):
         max_files: int = 200,
         force_reprocess: bool = False,
         pdf_text_table: str = "sharepoint_pdf_text",
-        file_table: str = "sharepoint_invoice_files"
+        file_table: str = "sharepoint_invoice_files",
+        session_id: str = "",
     ) -> str:
         """
         Recursively scans SharePoint invoice PDFs, extracts PDF page text once,
@@ -273,6 +279,7 @@ def register_sharepoint_tools(mcp: FastMCP):
             force_reprocess=force_reprocess,
             pdf_text_table=pdf_text_table,
             file_table=file_table,
+            session_id=session_id or None,
         )
 
 
@@ -281,7 +288,8 @@ def register_sharepoint_tools(mcp: FastMCP):
         folder_path: str,
         batch_number: str = "",
         max_files: int = 200,
-        force_reprocess: str = "false"
+        force_reprocess: str = "false",
+        session_id: str = "",
     ) -> str:
         """
         Short alias for ingesting SharePoint invoice PDFs into PostgreSQL.
@@ -294,6 +302,7 @@ def register_sharepoint_tools(mcp: FastMCP):
             force_reprocess=force_reprocess.strip().lower() in {"1", "true", "yes", "y"},
             pdf_text_table="sharepoint_pdf_text",
             file_table="sharepoint_invoice_files",
+            session_id=session_id or None,
         )
 
 
@@ -386,7 +395,8 @@ def register_sharepoint_tools(mcp: FastMCP):
         file_id: str,
         file_name: str,
         sharepoint_path: str = "",
-        table_name: str = "sharepoint_pdf_text"
+        table_name: str = "sharepoint_pdf_text",
+        session_id: str = "",
     ) -> str:
         """
         Downloads a SharePoint PDF, extracts page text, and stores it in PostgreSQL.
@@ -396,6 +406,7 @@ def register_sharepoint_tools(mcp: FastMCP):
             sp_client = get_sp_client()
             file_manager = get_file_manager()
             railway_client = get_railway_client()
+            table_name = resolve_session_table_name(table_name, session_id or None)
 
             _, pdf_path = _download_sharepoint_file_to_path(
                 sp_client,
@@ -416,7 +427,8 @@ def register_sharepoint_tools(mcp: FastMCP):
                 for page in pages
             ]
 
-            inserted = railway_client.store_pdf_text_rows(rows, table_name=table_name)
+            with table_write_lock(table_name):
+                inserted = railway_client.store_pdf_text_rows(rows, table_name=table_name)
 
             return (
                 f"Stored {inserted} PDF page text row(s) for '{file_name}' "
@@ -432,7 +444,8 @@ def register_sharepoint_tools(mcp: FastMCP):
     def stage_invoice_lines_to_railway(
         rows: list[dict],
         table_name: str = "sharepoint_invoice_lines",
-        mode: str = "append"
+        mode: str = "append",
+        session_id: str = "",
     ) -> str:
         """
         Stores parsed invoice line dictionaries into PostgreSQL.
@@ -447,8 +460,10 @@ def register_sharepoint_tools(mcp: FastMCP):
                 return "No invoice rows provided."
 
             railway_client = get_railway_client()
+            table_name = resolve_session_table_name(table_name, session_id or None)
             df = pd.DataFrame(rows)
-            inserted = railway_client.insert_dataframe_chunked(df, table_name, mode=mode)
+            with table_write_lock(table_name):
+                inserted = railway_client.insert_dataframe_chunked(df, table_name, mode=mode)
 
             return f"Stored {inserted} invoice line row(s) into PostgreSQL table '{table_name}'."
 
@@ -577,7 +592,7 @@ def register_sharepoint_tools(mcp: FastMCP):
     # NEW: SharePoint → Railway ingestion pipeline
     # =========================================================
     @mcp.tool()
-    def sharepoint_to_railway(folder_path: str, table_name: str) -> str:
+    def sharepoint_to_railway(folder_path: str, table_name: str, session_id: str = "") -> str:
         """
         Downloads files from SharePoint, parses them (CSV/Excel),
         and loads the data into Railway DB.
@@ -593,6 +608,7 @@ def register_sharepoint_tools(mcp: FastMCP):
             sp_client = get_sp_client()
             file_manager = get_file_manager()
             railway_client = get_railway_client()
+            table_name = resolve_session_table_name(table_name, session_id or None)
 
             railway_client.ensure_tracking_table()
             
@@ -661,19 +677,20 @@ def register_sharepoint_tools(mcp: FastMCP):
                 # =========================
                 # LOAD TO RAILWAY
                 # =========================
-                if first_chunk:
-                    inserted = railway_client.insert_dataframe_chunked(
-                        df,
-                        table_name,
-                        mode="replace"
-                    )
-                    first_chunk = False
-                else:
-                    inserted = railway_client.insert_dataframe_chunked(
-                        df,
-                        table_name,
-                        mode="append"
-                    )
+                with table_write_lock(table_name):
+                    if first_chunk:
+                        inserted = railway_client.insert_dataframe_chunked(
+                            df,
+                            table_name,
+                            mode="replace"
+                        )
+                        first_chunk = False
+                    else:
+                        inserted = railway_client.insert_dataframe_chunked(
+                            df,
+                            table_name,
+                            mode="append"
+                        )
 
                 total_rows += inserted
                 
