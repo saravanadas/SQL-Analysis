@@ -74,9 +74,12 @@ class Settings(BaseSettings):
     @field_validator("railway_db_url")
     @classmethod
     def validate_railway_url(cls, v):
-        if not v.startswith("postgresql://"):
-            raise ValueError("RAILWAY_DB_URL must be a valid PostgreSQL URL")
-        return v
+        for prefix in ("postgresql+psycopg2://", "postgresql://", "postgres://"):
+            if v.startswith(prefix):
+                # Pin the psycopg2 driver explicitly: SQLAlchemy 2.1+ defaults
+                # plain postgresql:// to psycopg (v3), which is not installed.
+                return "postgresql+psycopg2://" + v[len(prefix):]
+        raise ValueError("RAILWAY_DB_URL must be a valid PostgreSQL URL")
 
     @field_validator("sp_tenant_id", "sp_client_id", "sp_client_secret", "sp_site_id")
     @classmethod
@@ -128,4 +131,4 @@ class Settings(BaseSettings):
 # Singleton instance of settings
 settings = Settings()
 
-print("Loaded Railway DB URL:", settings.railway_db_url[:30], "...")
+print("Loaded Railway DB URL host:", settings.railway_db_url.rsplit("@", 1)[-1])
